@@ -231,8 +231,9 @@ class SQLiteMemoryProvider(MemoryProvider):
 
         # Load config if available
         try:
-            from hermes_cli.config import cfg_get
-            custom_path = cfg_get("memory.sqlite_memory.db_path", "")
+            from hermes_cli.config import load_config, cfg_get
+            config = load_config()
+            custom_path = cfg_get(config, "memory", "sqlite_memory", "db_path", default="")
             if custom_path:
                 self._db_path = Path(os.path.expanduser(str(custom_path)))
             else:
