@@ -21,6 +21,15 @@ router = APIRouter()
 
 def _get_db_path() -> Path:
     try:
+        from hermes_cli.config import load_config, cfg_get
+        config = load_config()
+        custom_path = cfg_get(config, "memory", "sqlite_memory", "db_path", default="")
+        if custom_path:
+            return Path(os.path.expanduser(str(custom_path)))
+    except Exception:
+        pass
+
+    try:
         from hermes_constants import get_hermes_home
         return get_hermes_home() / "memory.db"
     except Exception:
