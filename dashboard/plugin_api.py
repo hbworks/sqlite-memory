@@ -19,21 +19,25 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _get_db_path() -> Path:
-    try:
-        from hermes_cli.config import load_config, cfg_get
-        config = load_config()
-        custom_path = cfg_get(config, "memory", "sqlite_memory", "db_path", default="")
-        if custom_path:
-            return Path(os.path.expanduser(str(custom_path)))
-    except Exception:
-        pass
+def _get_available_profiles() -> List[str]:
+    """List all available profiles."""
+    profiles = ["default"]
+    profiles_dir = Path(os.path.expanduser("~/.hermes/profiles"))
+    if profiles_dir.exists() and profiles_dir.is_dir():
+        for p in sorted(profiles_dir.iterdir()):
+            if p.is_dir() and not p.name.startswith("."):
+                profiles.append(p.name)
+    return profiles
 
-    try:
-        from hermes_constants import get_hermes_home
-        return get_hermes_home() / "memory.db"
-    except Exception:
+
+def _get_db_path(profile: Optional[str] = None) -> Path:
+    """Resolve database path for the requested profile."""
+    prof = (profile or "").strip()
+    if not prof or prof in ("default", "main", "root", "~/.hermes"):
         return Path(os.path.expanduser("~/.hermes/memory.db"))
+
+    prof_dir = Path(os.path.expanduser(f"~/.hermes/profiles/{prof}"))
+    return prof_dir / "memory.db"
 
 
 def _ensure_db_initialized(conn: sqlite3.Connection) -> None:
@@ -60,8 +64,8 @@ def _ensure_db_initialized(conn: sqlite3.Connection) -> None:
         """)
 
 
-def _get_conn() -> sqlite3.Connection:
-    db_path = _get_db_path()
+def _get_conn(profile: Optional[str] = None) -> sqlite3.Connection:
+    db_path = _get_db_path(profile)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path), timeout=10.0)
     conn.row_factory = sqlite3.Row
@@ -82,10 +86,11 @@ class MemoryUpdateRequest(BaseModel):
 
 
 @router.get("/stats")
-async def get_stats() -> Dict[str, Any]:
+async def get_stats(profile: Optional[str] = Query(None, description="Profile name")) -> Dict[str, Any]:
     """Get overview statistics for persistent memories."""
+    db_path = _get_db_path(profile)
     try:
-        conn = _get_conn()
+        conn = _get_conn(profile)
         try:
             total_cursor = conn.execute("SELECT COUNT(*) as cnt FROM memories")
             total_row = total_cursor.fetchone()
@@ -94,7 +99,6 @@ async def get_stats() -> Dict[str, Any]:
             cat_cursor = conn.execute("SELECT category, COUNT(*) as cnt FROM memories GROUP BY category")
             categories = {row["category"]: row["cnt"] for row in cat_cursor.fetchall()}
 
-            db_path = _get_db_path()
             size_bytes = db_path.stat().st_size if db_path.exists() else 0
 
             return {
@@ -102,16 +106,20 @@ async def get_stats() -> Dict[str, Any]:
                 "categories": categories,
                 "db_path": str(db_path),
                 "db_size_bytes": size_bytes,
+                "profile": profile or "default",
+                "available_profiles": _get_available_profiles(),
             }
         finally:
             conn.close()
     except Exception as e:
-        logger.error("Error fetching memory stats: %s", e)
+        logger.error("Error fetching memory stats for profile %s: %s", profile, e)
         return {
             "total_memories": 0,
             "categories": {},
-            "db_path": str(_get_db_path()),
+            "db_path": str(db_path),
             "db_size_bytes": 0,
+            "profile": profile or "default",
+            "available_profiles": _get_available_profiles(),
         }
 
 
@@ -119,12 +127,13 @@ async def get_stats() -> Dict[str, Any]:
 async def list_memories(
     query: Optional[str] = Query(None, description="Search query"),
     category: Optional[str] = Query(None, description="Filter by category"),
+    profile: Optional[str] = Query(None, description="Profile name"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> Dict[str, Any]:
     """List or search memories."""
     try:
-        conn = _get_conn()
+        conn = _get_conn(profile)
         try:
             memories = []
             if query and query.strip():
@@ -184,12 +193,15 @@ async def list_memories(
 
 
 @router.post("/memories", status_code=http_status.HTTP_201_CREATED)
-async def create_memory(req: MemoryCreateRequest) -> Dict[str, Any]:
+async def create_memory(
+    req: MemoryCreateRequest,
+    profile: Optional[str] = Query(None, description="Profile name"),
+) -> Dict[str, Any]:
     """Create a new memory manually."""
     if not req.content.strip():
         raise HTTPException(status_code=400, detail="Content cannot be empty")
 
-    conn = _get_conn()
+    conn = _get_conn(profile)
     try:
         with conn:
             cursor = conn.execute(
@@ -210,9 +222,13 @@ async def create_memory(req: MemoryCreateRequest) -> Dict[str, Any]:
 
 
 @router.put("/memories/{memory_id}")
-async def update_memory(memory_id: int, req: MemoryUpdateRequest) -> Dict[str, Any]:
+async def update_memory(
+    memory_id: int,
+    req: MemoryUpdateRequest,
+    profile: Optional[str] = Query(None, description="Profile name"),
+) -> Dict[str, Any]:
     """Update an existing memory."""
-    conn = _get_conn()
+    conn = _get_conn(profile)
     try:
         with conn:
             existing = conn.execute("SELECT * FROM memories WHERE id = ?", (memory_id,)).fetchone()
@@ -242,9 +258,12 @@ async def update_memory(memory_id: int, req: MemoryUpdateRequest) -> Dict[str, A
 
 
 @router.delete("/memories/{memory_id}")
-async def delete_memory(memory_id: int) -> Dict[str, Any]:
+async def delete_memory(
+    memory_id: int,
+    profile: Optional[str] = Query(None, description="Profile name"),
+) -> Dict[str, Any]:
     """Delete a memory by ID."""
-    conn = _get_conn()
+    conn = _get_conn(profile)
     try:
         with conn:
             cursor = conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))

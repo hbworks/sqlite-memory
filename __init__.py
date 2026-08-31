@@ -121,12 +121,48 @@ LIST_SCHEMA = {
 }
 
 
-def _get_default_db_path() -> Path:
+def _get_hermes_home_dir() -> Path:
+    """Resolve active Hermes home directory respecting active profiles."""
+    if "HERMES_HOME" in os.environ and os.environ["HERMES_HOME"].strip():
+        return Path(os.path.expanduser(os.environ["HERMES_HOME"].strip()))
+
+    if "HERMES_PROFILE" in os.environ and os.environ["HERMES_PROFILE"].strip():
+        prof = os.environ["HERMES_PROFILE"].strip()
+        prof_dir = Path(os.path.expanduser(f"~/.hermes/profiles/{prof}"))
+        if prof_dir.exists():
+            return prof_dir
+
+    try:
+        active_prof_file = Path(os.path.expanduser("~/.hermes/active_profile"))
+        if active_prof_file.exists():
+            prof_name = active_prof_file.read_text(encoding="utf-8").strip()
+            if prof_name:
+                prof_dir = Path(os.path.expanduser(f"~/.hermes/profiles/{prof_name}"))
+                if prof_dir.exists():
+                    return prof_dir
+    except Exception:
+        pass
+
     try:
         from hermes_constants import get_hermes_home
-        return get_hermes_home() / "memory.db"
+        return get_hermes_home()
     except Exception:
-        return Path(os.path.expanduser("~/.hermes/memory.db"))
+        pass
+
+    return Path(os.path.expanduser("~/.hermes"))
+
+
+def _get_default_db_path() -> Path:
+    try:
+        from hermes_cli.config import load_config, cfg_get
+        config = load_config()
+        custom_path = cfg_get(config, "memory", "sqlite_memory", "db_path", default="")
+        if custom_path:
+            return Path(os.path.expanduser(str(custom_path)))
+    except Exception:
+        pass
+
+    return _get_hermes_home_dir() / "memory.db"
 
 
 class SQLiteMemoryProvider(MemoryProvider):
