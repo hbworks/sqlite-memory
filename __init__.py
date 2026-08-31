@@ -15,7 +15,17 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from agent.memory_provider import MemoryProvider, RecallStatus
+try:
+    from agent.memory_provider import MemoryProvider, RecallStatus
+except ImportError:
+    class MemoryProvider:  # type: ignore
+        pass
+
+    class RecallStatus:  # type: ignore
+        def __init__(self, provider_label: str = "", count: int = 0, glyph: str = ""):
+            self.provider_label = provider_label
+            self.count = count
+            self.glyph = glyph
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +135,8 @@ class SQLiteMemoryProvider(MemoryProvider):
     def __init__(self) -> None:
         super().__init__()
         self._db_path = _get_default_db_path()
+        self._auto_extract = True
+        self._max_recall = MAX_RECALL_RESULTS
         self._session_id = ""
         self._last_recall_count = 0
         self._lock = threading.Lock()
@@ -238,6 +250,15 @@ class SQLiteMemoryProvider(MemoryProvider):
                 self._db_path = Path(os.path.expanduser(str(custom_path)))
             else:
                 self._db_path = _get_default_db_path()
+
+            auto_extract_val = cfg_get(config, "memory", "sqlite_memory", "auto_extract", default="true")
+            self._auto_extract = str(auto_extract_val).lower() in ("true", "1", "yes")
+
+            max_recall_val = cfg_get(config, "memory", "sqlite_memory", "max_recall", default=5)
+            try:
+                self._max_recall = int(max_recall_val)
+            except (ValueError, TypeError):
+                self._max_recall = MAX_RECALL_RESULTS
         except Exception:
             self._db_path = _get_default_db_path()
 
@@ -340,7 +361,7 @@ class SQLiteMemoryProvider(MemoryProvider):
             self._last_recall_count = 0
             return ""
 
-        memories = self.search_memories(query, limit=MAX_RECALL_RESULTS)
+        memories = self.search_memories(query, limit=self._max_recall)
         self._last_recall_count = len(memories)
 
         if not memories:
@@ -409,6 +430,9 @@ class SQLiteMemoryProvider(MemoryProvider):
 
     def sync_turn(self, user_content: str, assistant_content: str, *, session_id: str = "") -> None:
         """Extract explicit preferences/rules if detected in turn."""
+        if not self._auto_extract:
+            return
+
         if not user_content or len(user_content.strip()) < 5:
             return
 
