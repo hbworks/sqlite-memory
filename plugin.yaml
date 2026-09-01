@@ -3,7 +3,12 @@ label: Persistent Memory (SQLite)
 version: 1.0.0
 description: Zero-dependency local persistent long-term memory for Hermes Agent.
 author: masato
-entry: __init__.py
+provides_tools:
+  - sqlite_remember
+  - sqlite_search
+  - sqlite_forget
+  - sqlite_list_memories
 dashboard:
   manifest: dashboard/manifest.json
+
 

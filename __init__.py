@@ -547,5 +547,18 @@ class SQLiteMemoryProvider(MemoryProvider):
 
 
 def register(ctx) -> None:
-    """Register SQLite memory provider plugin."""
-    ctx.register_memory_provider(SQLiteMemoryProvider())
+    """Register SQLite memory provider plugin and tools."""
+    provider = SQLiteMemoryProvider()
+    if hasattr(ctx, "register_memory_provider"):
+        ctx.register_memory_provider(provider)
+
+    if hasattr(ctx, "register_tool"):
+        for schema in provider.get_tool_schemas():
+            tool_name = schema.get("function", {}).get("name")
+            if tool_name:
+                ctx.register_tool(
+                    name=tool_name,
+                    schema=schema,
+                    handler=lambda args, _name=tool_name, **kwargs: provider.handle_tool_call(_name, args, **kwargs),
+                )
+
