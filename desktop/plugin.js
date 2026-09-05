@@ -64,6 +64,43 @@ const renderBadge = (catKey) => {
   })
 }
 
+// UTC 日時文字列をブラウザのローカルタイムゾーン（JST等）に変換するヘルパー
+const parseUtcDate = (val) => {
+  if (!val) return null
+  if (val instanceof Date) return isNaN(val.getTime()) ? null : val
+  if (typeof val === 'number') {
+    const d = new Date(val > 1e11 ? val : val * 1000)
+    return isNaN(d.getTime()) ? null : d
+  }
+  if (typeof val === 'string') {
+    const clean = val.trim()
+    if (!clean) return null
+    // 'YYYY-MM-DD HH:MM:SS' 等のUTC形式（タイムゾーン指定なし）の場合、'Z' を補完してUTCとして解釈
+    const iso = clean.includes('T')
+      ? (clean.endsWith('Z') || clean.includes('+') ? clean : clean + 'Z')
+      : clean.replace(' ', 'T') + 'Z'
+    const d = new Date(iso)
+    if (!isNaN(d.getTime())) return d
+    const fallback = new Date(clean)
+    return isNaN(fallback.getTime()) ? null : fallback
+  }
+  return null
+}
+
+const formatLocalTime = (val) => {
+  const d = parseUtcDate(val)
+  if (!d) return val || '不明'
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
+
+const formatLocalDateShort = (val) => {
+  const d = parseUtcDate(val)
+  if (!d) return (val || '').split(' ')[0].slice(5)
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
 const S = {
   page: {
     display: 'flex',
@@ -424,7 +461,7 @@ function MemoryManagementPage() {
                           })
                         ]
                       }),
-                      jsx('span', { style: { fontSize: '9px', color: '#9ca3af', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }, children: (item.created_at || '').split(' ')[0].slice(5) })
+                      jsx('span', { style: { fontSize: '9px', color: '#9ca3af', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }, children: formatLocalDateShort(item.created_at) })
                     ]
                   })
                 })
@@ -465,8 +502,8 @@ function MemoryManagementPage() {
                     jsxs('div', {
                       style: { display: 'flex', gap: '16px', padding: '10px 14px', backgroundColor: '#fafafa', borderRadius: '6px', fontSize: '11px', color: '#6b7280' },
                       children: [
-                        jsxs('div', { children: ['作成: ', jsx('span', { style: { fontWeight: 500, color: '#111827' }, children: activeMemory.created_at || '不明' })] }),
-                        jsxs('div', { children: ['更新: ', jsx('span', { style: { fontWeight: 500, color: '#111827' }, children: activeMemory.updated_at || '不明' })] }),
+                        jsxs('div', { children: ['作成: ', jsx('span', { style: { fontWeight: 500, color: '#111827' }, children: formatLocalTime(activeMemory.created_at) })] }),
+                        jsxs('div', { children: ['更新: ', jsx('span', { style: { fontWeight: 500, color: '#111827' }, children: formatLocalTime(activeMemory.updated_at) })] }),
                         jsxs('div', { children: ['登録元: ', jsx('span', { style: { fontWeight: 500, color: '#111827' }, children: activeMemory.source || 'manual' })] })
                       ]
                     }),
