@@ -6,13 +6,11 @@
  */
 
 import {
-  cn,
   Codicon,
   host,
   useValue,
   ROUTES_AREA,
-  SIDEBAR_NAV_AREA,
-  Tip
+  SIDEBAR_NAV_AREA
 } from '@hermes/plugin-sdk'
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
@@ -49,6 +47,21 @@ const CATEGORY_STYLES = {
   project:    { label: 'プロジェクト', dot: '#10b981', badgeBg: 'rgba(16, 185, 129, 0.1)', badgeColor: '#059669' },
   rule:       { label: 'ルール',     dot: '#f59e0b', badgeBg: 'rgba(245, 158, 11, 0.1)', badgeColor: '#d97706' },
   general:    { label: '一般',       dot: '#8b5cf6', badgeBg: 'rgba(139, 92, 246, 0.1)', badgeColor: '#7c3aed' }
+}
+
+const renderBadge = (catKey) => {
+  const cat = CATEGORY_STYLES[catKey] || CATEGORY_STYLES.general
+  return jsx('span', {
+    style: {
+      fontSize: '11px',
+      fontWeight: 600,
+      padding: '2px 8px',
+      borderRadius: '9999px',
+      backgroundColor: cat.badgeBg,
+      color: cat.badgeColor
+    },
+    children: cat.label
+  })
 }
 
 const S = {
@@ -129,27 +142,28 @@ function MemoryManagementPage() {
   const [mobileDetailOpen, setMobileDetailOpen] = useState(false)
 
   const containerRef = useRef(null)
-
   const focusedProfileAtom = host.state.focusedSessionProfile || host.state.profile
   const hostProfileName = useValue(focusedProfileAtom) || 'default'
 
   useEffect(() => {
-    if (hostProfileName && hostProfileName !== 'default') {
-      setSelectedProfile(hostProfileName)
-    }
+    if (hostProfileName && hostProfileName !== 'default') setSelectedProfile(hostProfileName)
   }, [hostProfileName])
 
   useEffect(() => {
     const el = containerRef.current
     if (!el || typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver((entries) => {
-      for (const e of entries) {
-        setIsCompact(e.contentRect.width < 580)
-      }
-    })
+    const ro = new ResizeObserver(([e]) => setIsCompact(e.contentRect.width < 580))
     ro.observe(el)
     return () => ro.disconnect()
   }, [])
+
+  // Escapeキーでモーダルを閉じる
+  useEffect(() => {
+    if (!showAddModal) return
+    const onKeyDown = (e) => { if (e.key === 'Escape') setShowAddModal(false) }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [showAddModal])
 
   const loadStats = useCallback(async () => {
     try {
@@ -168,22 +182,14 @@ function MemoryManagementPage() {
   const loadMemories = useCallback(async () => {
     setLoading(true)
     try {
-      const params = new URLSearchParams({
-        profile: selectedProfile,
-        limit: '100',
-        offset: '0'
-      })
+      const params = new URLSearchParams({ profile: selectedProfile, limit: '100', offset: '0' })
       if (query.trim()) params.append('query', query.trim())
       if (selectedCategory && selectedCategory !== 'all') params.append('category', selectedCategory)
 
       const data = await api(`/memories?${params.toString()}`)
       const loaded = data.items || []
       setItems(loaded)
-      if (loaded.length > 0) {
-        setSelectedId((prev) => (prev && loaded.some((i) => i.id === prev) ? prev : loaded[0].id))
-      } else {
-        setSelectedId(null)
-      }
+      setSelectedId((prev) => (prev && loaded.some((i) => i.id === prev) ? prev : (loaded[0]?.id ?? null)))
     } catch (e) {
       console.error('Error loading memories:', e)
     } finally {
@@ -208,17 +214,12 @@ function MemoryManagementPage() {
     if (!formContent.trim()) return
     setSaving(true)
     try {
-      if (editId) {
-        await api(`/memories/${editId}?profile=${encodeURIComponent(selectedProfile)}`, {
-          method: 'PUT',
-          body: JSON.stringify({ content: formContent.trim(), category: formCategory })
-        })
-      } else {
-        await api(`/memories?profile=${encodeURIComponent(selectedProfile)}`, {
-          method: 'POST',
-          body: JSON.stringify({ content: formContent.trim(), category: formCategory })
-        })
-      }
+      const method = editId ? 'PUT' : 'POST'
+      const endpoint = editId ? `/memories/${editId}` : '/memories'
+      await api(`${endpoint}?profile=${encodeURIComponent(selectedProfile)}`, {
+        method,
+        body: JSON.stringify({ content: formContent.trim(), category: formCategory })
+      })
       setShowAddModal(false)
       setEditId(null)
       setFormContent('')
@@ -244,17 +245,10 @@ function MemoryManagementPage() {
     }
   }
 
-  const handleOpenEdit = (item) => {
-    setEditId(item.id)
-    setFormCategory(item.category || 'preference')
-    setFormContent(item.content || '')
-    setShowAddModal(true)
-  }
-
-  const handleOpenCreate = () => {
-    setEditId(null)
-    setFormContent('')
-    setFormCategory('preference')
+  const handleOpenModal = (item = null) => {
+    setEditId(item?.id ?? null)
+    setFormCategory(item?.category || 'preference')
+    setFormContent(item?.content || '')
     setShowAddModal(true)
   }
 
@@ -270,7 +264,7 @@ function MemoryManagementPage() {
     ref: containerRef,
     style: S.page,
     children: [
-      // 1. トップヘッダー（検索バー + カテゴリピル）
+      // 1. トップヘッダー
       jsxs('div', {
         style: { padding: '14px 18px 10px 18px', borderBottom: '1px solid var(--border, #e5e7eb)', ...S.flexCol, gap: '10px', flexShrink: 0 },
         children: [
@@ -282,7 +276,7 @@ function MemoryManagementPage() {
                 style: { position: 'relative', display: 'flex', alignItems: 'center', flex: 1, maxWidth: '320px' },
                 children: [
                   jsx('span', {
-                    style: { position: 'absolute', left: '8px', color: '#9ca3af', display: 'flex', alignItems: 'center', pointerEvents: 'none' },
+                    style: { position: 'absolute', left: '8px', color: '#9ca3af', display: 'flex', pointerEvents: 'none' },
                     children: jsx(Codicon, { name: 'search', size: '0.9rem' })
                   }),
                   jsx('input', {
@@ -294,7 +288,7 @@ function MemoryManagementPage() {
                   })
                 ]
               }),
-              jsx('button', { onClick: handleOpenCreate, style: S.btnPrimary, children: [jsx(Codicon, { name: 'add', size: '0.8rem' }), ' 記憶を追加'] })
+              jsx('button', { onClick: () => handleOpenModal(), style: S.btnPrimary, children: [jsx(Codicon, { name: 'add', size: '0.8rem' }), ' 記憶を追加'] })
             ]
           }),
 
@@ -336,7 +330,7 @@ function MemoryManagementPage() {
         ]
       }),
 
-      // 2. サブ情報バー（Profile / Storage / 合計）
+      // 2. サブ情報バー
       jsxs('div', {
         style: { ...S.flexBetween, padding: '6px 18px', backgroundColor: '#fafafa', borderBottom: '1px solid var(--border, #e5e7eb)', fontSize: '11px', color: '#6b7280', flexShrink: 0 },
         children: [
@@ -369,7 +363,7 @@ function MemoryManagementPage() {
         ]
       }),
 
-      // 3. メイン2カラム（一覧 + 詳細ビュー）
+      // 3. メイン2カラム
       jsxs('div', {
         style: { display: 'flex', flex: 1, overflow: 'hidden', position: 'relative' },
         children: [
@@ -401,7 +395,7 @@ function MemoryManagementPage() {
               ) : (
                 items.map((item) => {
                   const isSelected = item.id === selectedId
-                  const catStyle = CATEGORY_STYLES[item.category] || CATEGORY_STYLES.general
+                  const cat = CATEGORY_STYLES[item.category] || CATEGORY_STYLES.general
                   return jsxs('div', {
                     key: item.id,
                     onClick: () => handleSelectItem(item.id),
@@ -420,7 +414,7 @@ function MemoryManagementPage() {
                       jsxs('div', {
                         style: { display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 },
                         children: [
-                          jsx('span', { style: { width: '7px', height: '7px', borderRadius: '50%', backgroundColor: catStyle.dot, flexShrink: 0 } }),
+                          jsx('span', { style: { width: '7px', height: '7px', borderRadius: '50%', backgroundColor: cat.dot, flexShrink: 0 } }),
                           jsxs('div', {
                             style: { display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 },
                             children: [
@@ -454,23 +448,13 @@ function MemoryManagementPage() {
                           style: { display: 'flex', alignItems: 'center', gap: '8px' },
                           children: [
                             jsx('h2', { style: { fontSize: '18px', fontWeight: 600, margin: 0, color: '#111827' }, children: `Memory #${activeMemory.id}` }),
-                            jsx('span', {
-                              style: {
-                                fontSize: '11px',
-                                fontWeight: 600,
-                                padding: '2px 8px',
-                                borderRadius: '9999px',
-                                backgroundColor: (CATEGORY_STYLES[activeMemory.category] || CATEGORY_STYLES.general).badgeBg,
-                                color: (CATEGORY_STYLES[activeMemory.category] || CATEGORY_STYLES.general).badgeColor
-                              },
-                              children: (CATEGORY_STYLES[activeMemory.category] || CATEGORY_STYLES.general).label
-                            })
+                            renderBadge(activeMemory.category)
                           ]
                         }),
                         jsxs('div', {
                           style: { display: 'flex', gap: '6px' },
                           children: [
-                            jsx('button', { onClick: () => handleOpenEdit(activeMemory), style: S.btnAction, children: [jsx(Codicon, { name: 'edit', size: '0.8rem' }), ' 編集'] }),
+                            jsx('button', { onClick: () => handleOpenModal(activeMemory), style: S.btnAction, children: [jsx(Codicon, { name: 'edit', size: '0.8rem' }), ' 編集'] }),
                             jsx('button', { onClick: () => handleDelete(activeMemory.id), style: { ...S.btnAction, color: '#dc2626' }, children: [jsx(Codicon, { name: 'trash', size: '0.8rem' }), ' 削除'] })
                           ]
                         })
