@@ -12,8 +12,9 @@ import os
 import re
 import sqlite3
 import threading
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Generator, List, Optional
 
 try:
     from agent.memory_provider import MemoryProvider, RecallStatus
@@ -33,7 +34,7 @@ MIN_QUERY_LEN = 2
 MAX_RECALL_RESULTS = 5
 INDICATOR_GLYPH = "💾"
 
-# Tool Schemas
+# --- Tool Schemas ---
 REMEMBER_SCHEMA = {
     "type": "function",
     "function": {
@@ -42,10 +43,7 @@ REMEMBER_SCHEMA = {
         "parameters": {
             "type": "object",
             "properties": {
-                "content": {
-                    "type": "string",
-                    "description": "The exact fact, preference, rule, or piece of context to remember across sessions.",
-                },
+                "content": {"type": "string", "description": "The fact, preference, rule, or context to remember."},
                 "category": {
                     "type": "string",
                     "description": "Category for organizing memories (e.g. 'preference', 'project', 'user', 'rule', 'general').",
@@ -61,19 +59,12 @@ SEARCH_SCHEMA = {
     "type": "function",
     "function": {
         "name": "sqlite_search",
-        "description": "Search the persistent long-term SQLite memory using keywords or full-text query.",
+        "description": "Search persistent SQLite memory using keywords or full-text query.",
         "parameters": {
             "type": "object",
             "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Search keywords or phrase to look up in memory.",
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Maximum number of results to return (default 5).",
-                    "default": 5,
-                },
+                "query": {"type": "string", "description": "Search keywords or phrase."},
+                "limit": {"type": "integer", "description": "Maximum number of results (default 5).", "default": 5},
             },
             "required": ["query"],
         },
@@ -87,12 +78,7 @@ FORGET_SCHEMA = {
         "description": "Delete a memory from persistent SQLite memory by its ID.",
         "parameters": {
             "type": "object",
-            "properties": {
-                "memory_id": {
-                    "type": "integer",
-                    "description": "The ID of the memory to remove.",
-                },
-            },
+            "properties": {"memory_id": {"type": "integer", "description": "The ID of the memory to remove."}},
             "required": ["memory_id"],
         },
     },
@@ -106,15 +92,8 @@ LIST_SCHEMA = {
         "parameters": {
             "type": "object",
             "properties": {
-                "category": {
-                    "type": "string",
-                    "description": "Optional category filter (e.g. 'preference', 'project').",
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Maximum number of memories to list (default 10).",
-                    "default": 10,
-                },
+                "category": {"type": "string", "description": "Optional category filter."},
+                "limit": {"type": "integer", "description": "Maximum number of memories (default 10).", "default": 10},
             },
         },
     },
@@ -123,23 +102,23 @@ LIST_SCHEMA = {
 
 def _get_hermes_home_dir() -> Path:
     """Resolve active Hermes home directory respecting active profiles."""
-    if "HERMES_HOME" in os.environ and os.environ["HERMES_HOME"].strip():
+    if os.environ.get("HERMES_HOME", "").strip():
         return Path(os.path.expanduser(os.environ["HERMES_HOME"].strip()))
 
-    if "HERMES_PROFILE" in os.environ and os.environ["HERMES_PROFILE"].strip():
-        prof = os.environ["HERMES_PROFILE"].strip()
+    prof = os.environ.get("HERMES_PROFILE", "").strip()
+    if prof:
         prof_dir = Path(os.path.expanduser(f"~/.hermes/profiles/{prof}"))
         if prof_dir.exists():
             return prof_dir
 
     try:
-        active_prof_file = Path(os.path.expanduser("~/.hermes/active_profile"))
-        if active_prof_file.exists():
-            prof_name = active_prof_file.read_text(encoding="utf-8").strip()
+        active_prof = Path(os.path.expanduser("~/.hermes/active_profile"))
+        if active_prof.exists():
+            prof_name = active_prof.read_text(encoding="utf-8").strip()
             if prof_name:
-                prof_dir = Path(os.path.expanduser(f"~/.hermes/profiles/{prof_name}"))
-                if prof_dir.exists():
-                    return prof_dir
+                p_dir = Path(os.path.expanduser(f"~/.hermes/profiles/{prof_name}"))
+                if p_dir.exists():
+                    return p_dir
     except Exception:
         pass
 
@@ -152,16 +131,15 @@ def _get_hermes_home_dir() -> Path:
     return Path(os.path.expanduser("~/.hermes"))
 
 
-def _get_default_db_path() -> Path:
+def _get_configured_db_path() -> Path:
+    """Read custom DB path from config or fallback to default."""
     try:
         from hermes_cli.config import load_config, cfg_get
-        config = load_config()
-        custom_path = cfg_get(config, "memory", "sqlite_memory", "db_path", default="")
+        custom_path = cfg_get(load_config(), "memory", "sqlite_memory", "db_path", default="")
         if custom_path:
             return Path(os.path.expanduser(str(custom_path)))
     except Exception:
         pass
-
     return _get_hermes_home_dir() / "memory.db"
 
 
@@ -170,45 +148,34 @@ class SQLiteMemoryProvider(MemoryProvider):
 
     def __init__(self) -> None:
         super().__init__()
-        self._db_path = _get_default_db_path()
+        self._db_path = _get_configured_db_path()
         self._auto_extract = True
         self._max_recall = MAX_RECALL_RESULTS
         self._session_id = ""
         self._last_recall_count = 0
         self._lock = threading.Lock()
         self._initialized = False
-        self._init_db()
+        self._ensure_db()
 
     @property
     def name(self) -> str:
         return "sqlite_memory"
 
     def is_available(self) -> bool:
-        """sqlite3 is standard library, always available."""
         return True
 
     def get_config_schema(self):
-        return [
-            {
-                "key": "db_path",
-                "description": "Path to the SQLite database file",
-                "default": str(_get_default_db_path()),
-            },
-            {
-                "key": "auto_extract",
-                "description": "Automatically extract facts and preferences from conversation turns",
-                "default": "true",
-                "choices": ["true", "false"],
-            },
-            {
-                "key": "max_recall",
-                "description": "Max number of relevant memories to prefetch per turn",
-                "default": "5",
-            },
-        ]
+        try:
+            from .config_schema import CONFIG_SCHEMA
+            return CONFIG_SCHEMA
+        except Exception:
+            return [
+                {"key": "db_path", "description": "Path to SQLite database", "default": str(self._db_path)},
+                {"key": "auto_extract", "description": "Auto extract rules/preferences", "default": "true"},
+                {"key": "max_recall", "description": "Max prefetch memories", "default": "5"},
+            ]
 
     def _get_connection(self) -> sqlite3.Connection:
-        """Create and configure a SQLite connection."""
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(self._db_path), timeout=10.0)
         conn.row_factory = sqlite3.Row
@@ -216,14 +183,17 @@ class SQLiteMemoryProvider(MemoryProvider):
         conn.execute("PRAGMA synchronous = NORMAL;")
         return conn
 
-    def _init_db(self) -> None:
-        """Initialize SQLite database tables, FTS5 virtual table, and triggers."""
+    def _ensure_db(self) -> None:
+        """Initialize SQLite tables and FTS5 triggers once."""
+        if self._initialized:
+            return
         with self._lock:
+            if self._initialized:
+                return
             try:
                 self._db_path.parent.mkdir(parents=True, exist_ok=True)
                 conn = self._get_connection()
                 with conn:
-                    # Main memories table
                     conn.execute("""
                         CREATE TABLE IF NOT EXISTS memories (
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -235,18 +205,11 @@ class SQLiteMemoryProvider(MemoryProvider):
                             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                         );
                     """)
-
-                    # FTS5 full-text search table
                     conn.execute("""
                         CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
-                            content,
-                            category,
-                            content='memories',
-                            content_rowid='id'
+                            content, category, content='memories', content_rowid='id'
                         );
                     """)
-
-                    # Triggers to keep FTS5 synchronized
                     conn.execute("""
                         CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
                             INSERT INTO memories_fts(rowid, content, category)
@@ -272,33 +235,33 @@ class SQLiteMemoryProvider(MemoryProvider):
             except Exception as e:
                 logger.error("Failed to initialize SQLite memory tables: %s", e)
 
+    @contextmanager
+    def _conn(self) -> Generator[sqlite3.Connection, None, None]:
+        """Managed SQLite connection context."""
+        self._ensure_db()
+        conn = self._get_connection()
+        try:
+            yield conn
+        finally:
+            conn.close()
+
     def initialize(self, session_id: str = "", **kwargs) -> None:
         """Called on agent startup / session initialization."""
         self._session_id = session_id
         self._last_recall_count = 0
 
-        # Load config if available
         try:
             from hermes_cli.config import load_config, cfg_get
             config = load_config()
             custom_path = cfg_get(config, "memory", "sqlite_memory", "db_path", default="")
-            if custom_path:
-                self._db_path = Path(os.path.expanduser(str(custom_path)))
-            else:
-                self._db_path = _get_default_db_path()
-
-            auto_extract_val = cfg_get(config, "memory", "sqlite_memory", "auto_extract", default="true")
-            self._auto_extract = str(auto_extract_val).lower() in ("true", "1", "yes")
-
-            max_recall_val = cfg_get(config, "memory", "sqlite_memory", "max_recall", default=5)
-            try:
-                self._max_recall = int(max_recall_val)
-            except (ValueError, TypeError):
-                self._max_recall = MAX_RECALL_RESULTS
+            self._db_path = Path(os.path.expanduser(str(custom_path))) if custom_path else _get_configured_db_path()
+            self._auto_extract = str(cfg_get(config, "memory", "sqlite_memory", "auto_extract", default="true")).lower() in ("true", "1", "yes")
+            self._max_recall = int(cfg_get(config, "memory", "sqlite_memory", "max_recall", default=5))
         except Exception:
-            self._db_path = _get_default_db_path()
+            self._db_path = _get_configured_db_path()
 
-        self._init_db()
+        self._initialized = False
+        self._ensure_db()
         logger.info("SQLiteMemoryProvider initialized with DB at %s", self._db_path)
 
     def system_prompt_block(self) -> str:
@@ -319,130 +282,86 @@ class SQLiteMemoryProvider(MemoryProvider):
         )
 
     def _sanitize_fts_query(self, query: str) -> str:
-        """Sanitize query string for SQLite FTS5."""
         clean = re.sub(r'[^\w\s\u3000-\u303f\u3040-\u309f\u30a0-\u30ff\uff00-\uff9f\u4e00-\u9faf]', ' ', query)
         terms = [t.strip() for t in clean.split() if len(t.strip()) >= 2]
-        if not terms:
-            return ""
-        return " OR ".join(f'"{t}"' for t in terms[:10])
+        return " OR ".join(f'"{t}"' for t in terms[:10]) if terms else ""
 
     def search_memories(self, query: str, limit: int = 5, category: Optional[str] = None) -> List[Dict[str, Any]]:
         """Search memories using FTS5 with fallback to LIKE search."""
-        self._init_db()
         results: List[Dict[str, Any]] = []
         fts_query = self._sanitize_fts_query(query)
 
-        conn = self._get_connection()
-        try:
-            # 1. Try FTS5 search first
-            if fts_query:
-                sql = """
-                    SELECT m.id, m.category, m.content, m.created_at,
-                           bm25(memories_fts) as rank
-                    FROM memories_fts f
-                    JOIN memories m ON m.id = f.rowid
-                    WHERE memories_fts MATCH ?
-                """
-                params: List[Any] = [fts_query]
-                if category:
-                    sql += " AND m.category = ?"
-                    params.append(category)
-                sql += " ORDER BY rank LIMIT ?"
-                params.append(limit)
-
-                cursor = conn.execute(sql, params)
-                for row in cursor.fetchall():
-                    results.append({
-                        "id": row["id"],
-                        "category": row["category"],
-                        "content": row["content"],
-                        "created_at": row["created_at"],
-                    })
-
-            # 2. Fallback to LIKE if FTS yielded no results or query was plain
-            if not results and query.strip():
-                keywords = [k.strip() for k in query.split() if len(k.strip()) >= 2]
-                if keywords:
-                    where_clauses = ["m.content LIKE ?" for _ in keywords[:3]]
-                    sql = f"""
-                        SELECT m.id, m.category, m.content, m.created_at
-                        FROM memories m
-                        WHERE ({" OR ".join(where_clauses)})
+        with self._conn() as conn:
+            try:
+                if fts_query:
+                    sql = """
+                        SELECT m.id, m.category, m.content, m.created_at, bm25(memories_fts) as rank
+                        FROM memories_fts f
+                        JOIN memories m ON m.id = f.rowid
+                        WHERE memories_fts MATCH ?
                     """
-                    params = [f"%{k}%" for k in keywords[:3]]
+                    params: List[Any] = [fts_query]
                     if category:
                         sql += " AND m.category = ?"
                         params.append(category)
-                    sql += " ORDER BY m.updated_at DESC LIMIT ?"
+                    sql += " ORDER BY rank LIMIT ?"
                     params.append(limit)
 
-                    cursor = conn.execute(sql, params)
-                    for row in cursor.fetchall():
-                        results.append({
-                            "id": row["id"],
-                            "category": row["category"],
-                            "content": row["content"],
-                            "created_at": row["created_at"],
-                        })
-        except Exception as e:
-            logger.debug("SQLite memory search error: %s", e)
-        finally:
-            conn.close()
+                    for row in conn.execute(sql, params).fetchall():
+                        results.append({"id": row["id"], "category": row["category"], "content": row["content"], "created_at": row["created_at"]})
+
+                # Fallback to LIKE search if FTS returned nothing
+                if not results and query.strip():
+                    keywords = [k.strip() for k in query.split() if len(k.strip()) >= 2][:3]
+                    if keywords:
+                        where = " OR ".join(["m.content LIKE ?" for _ in keywords])
+                        sql = f"SELECT id, category, content, created_at FROM memories m WHERE ({where})"
+                        params = [f"%{k}%" for k in keywords]
+                        if category:
+                            sql += " AND m.category = ?"
+                            params.append(category)
+                        sql += " ORDER BY m.updated_at DESC LIMIT ?"
+                        params.append(limit)
+
+                        for row in conn.execute(sql, params).fetchall():
+                            results.append({"id": row["id"], "category": row["category"], "content": row["content"], "created_at": row["created_at"]})
+            except Exception as e:
+                logger.debug("SQLite memory search error: %s", e)
 
         return results
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
-        """Search and inject relevant memories prior to LLM turn."""
         if not query or len(query.strip()) < MIN_QUERY_LEN:
             self._last_recall_count = 0
             return ""
 
         memories = self.search_memories(query, limit=self._max_recall)
         self._last_recall_count = len(memories)
-
         if not memories:
             return ""
 
-        lines = [f"- [ID: {m['id']}] ({m['category']}) {m['content']}" for m in memories]
-        formatted = "\n".join(lines)
+        formatted = "\n".join([f"- [ID: {m['id']}] ({m['category']}) {m['content']}" for m in memories])
         return f"## Relevant Long-Term Memories (from SQLite)\n{formatted}"
 
     def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
         pass
 
     def add_memory(self, content: str, category: str = "general", source: str = "manual") -> int:
-        """Insert a new memory row."""
-        self._init_db()
-        conn = self._get_connection()
-        try:
+        with self._conn() as conn:
             with conn:
                 cursor = conn.execute(
-                    """
-                    INSERT INTO memories (category, content, source, session_id)
-                    VALUES (?, ?, ?, ?)
-                    """,
+                    "INSERT INTO memories (category, content, source, session_id) VALUES (?, ?, ?, ?)",
                     (category, content.strip(), source, self._session_id),
                 )
                 return cursor.lastrowid or 0
-        finally:
-            conn.close()
 
     def delete_memory(self, memory_id: int) -> bool:
-        """Delete a memory row by ID."""
-        self._init_db()
-        conn = self._get_connection()
-        try:
+        with self._conn() as conn:
             with conn:
-                cursor = conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
-                return cursor.rowcount > 0
-        finally:
-            conn.close()
+                return conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,)).rowcount > 0
 
     def list_memories(self, category: Optional[str] = None, limit: int = 10) -> List[Dict[str, Any]]:
-        """List recently stored memories."""
-        self._init_db()
-        conn = self._get_connection()
-        try:
+        with self._conn() as conn:
             sql = "SELECT id, category, content, created_at FROM memories"
             params: List[Any] = []
             if category:
@@ -450,26 +369,10 @@ class SQLiteMemoryProvider(MemoryProvider):
                 params.append(category)
             sql += " ORDER BY updated_at DESC LIMIT ?"
             params.append(limit)
-
-            cursor = conn.execute(sql, params)
-            return [
-                {
-                    "id": row["id"],
-                    "category": row["category"],
-                    "content": row["content"],
-                    "created_at": row["created_at"],
-                }
-                for row in cursor.fetchall()
-            ]
-        finally:
-            conn.close()
+            return [dict(row) for row in conn.execute(sql, params).fetchall()]
 
     def sync_turn(self, user_content: str, assistant_content: str, *, session_id: str = "") -> None:
-        """Extract explicit preferences/rules if detected in turn."""
-        if not self._auto_extract:
-            return
-
-        if not user_content or len(user_content.strip()) < 5:
+        if not self._auto_extract or not user_content or len(user_content.strip()) < 5:
             return
 
         explicit_patterns = [
@@ -478,27 +381,20 @@ class SQLiteMemoryProvider(MemoryProvider):
             r"(?:(?:これ|以下|次|私の好みを?)\s*覚えて(?:おいて|ください|ね)?\s*[:：]?\s*)(.+)",
             r"(?:(?:今後|次回から|これからは)\s*(.+)(?:にして|を使って|でやって))",
         ]
-
         text = user_content.strip()
-        extracted = []
         for pat in explicit_patterns:
             m = re.search(pat, text, re.IGNORECASE)
             if m and m.group(1):
-                extracted.append(m.group(1).strip())
-
-        if extracted:
-            for item in extracted:
+                item = m.group(1).strip()
                 self.add_memory(content=item, category="preference", source="auto_extract")
                 logger.info("SQLiteMemoryProvider auto-extracted memory: %s", item)
 
     def on_memory_write(self, action: str, target: str, content: str) -> None:
-        """Mirror Hermes memory writes to SQLite."""
         if action in {"add", "replace"} and content:
             category = "user" if target == "user" else "general"
             self.add_memory(content=content, category=category, source="system_sync")
 
     def backup_paths(self) -> List[str]:
-        """Paths to include in hermes backup."""
         return [str(self._db_path)]
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
@@ -508,34 +404,27 @@ class SQLiteMemoryProvider(MemoryProvider):
         try:
             if tool_name == "sqlite_remember":
                 content = args.get("content", "").strip()
-                category = args.get("category", "general")
                 if not content:
                     return json.dumps({"error": "content is required"})
-                mem_id = self.add_memory(content=content, category=category, source="tool")
+                mem_id = self.add_memory(content=content, category=args.get("category", "general"), source="tool")
                 return json.dumps({"status": "success", "memory_id": mem_id, "message": "Fact stored in SQLite memory."})
 
-            elif tool_name == "sqlite_search":
+            if tool_name == "sqlite_search":
                 query = args.get("query", "").strip()
-                limit = int(args.get("limit", 5))
                 if not query:
                     return json.dumps({"error": "query is required"})
-                results = self.search_memories(query=query, limit=limit)
+                results = self.search_memories(query=query, limit=int(args.get("limit", 5)))
                 return json.dumps({"status": "success", "count": len(results), "results": results})
 
-            elif tool_name == "sqlite_forget":
+            if tool_name == "sqlite_forget":
                 mem_id = int(args.get("memory_id", 0))
                 if not mem_id:
                     return json.dumps({"error": "memory_id is required"})
                 deleted = self.delete_memory(mem_id)
-                if deleted:
-                    return json.dumps({"status": "success", "message": f"Memory ID {mem_id} deleted."})
-                else:
-                    return json.dumps({"status": "not_found", "message": f"Memory ID {mem_id} not found."})
+                return json.dumps({"status": "success" if deleted else "not_found", "message": f"Memory ID {mem_id} {'deleted' if deleted else 'not found'}."})
 
-            elif tool_name == "sqlite_list_memories":
-                category = args.get("category")
-                limit = int(args.get("limit", 10))
-                memories = self.list_memories(category=category, limit=limit)
+            if tool_name == "sqlite_list_memories":
+                memories = self.list_memories(category=args.get("category"), limit=int(args.get("limit", 10)))
                 return json.dumps({"status": "success", "count": len(memories), "memories": memories})
 
             return json.dumps({"error": f"Unknown tool: {tool_name}"})
@@ -554,11 +443,11 @@ def register(ctx) -> None:
 
     if hasattr(ctx, "register_tool"):
         for schema in provider.get_tool_schemas():
-            tool_name = schema.get("function", {}).get("name")
-            if tool_name:
+            name = schema.get("function", {}).get("name")
+            if name:
                 ctx.register_tool(
-                    name=tool_name,
+                    name=name,
+                    toolset="sqlite_memory",
                     schema=schema,
-                    handler=lambda args, _name=tool_name, **kwargs: provider.handle_tool_call(_name, args, **kwargs),
+                    handler=lambda args, _name=name, **kwargs: provider.handle_tool_call(_name, args, **kwargs),
                 )
-
