@@ -319,20 +319,24 @@ function MemoryManagementPage() {
   const [mobileDetailOpen, setMobileDetailOpen] = useState(false)
 
   const containerRef = useRef(null)
+  const isManuallySelected = useRef(false)
   const focusedProfileAtom = host.state?.focusedSessionProfile || host.state?.profile
   const hostProfileName = useValue(focusedProfileAtom)
 
-  useEffect(() => {
-    if (hostProfileName && hostProfileName !== 'default') {
-      setSelectedProfile(hostProfileName)
-      try { localStorage.setItem('hermes_sqlite_memory_profile', hostProfileName) } catch (_) {}
-    }
-  }, [hostProfileName])
-
   const handleSelectProfile = (newProfile) => {
+    isManuallySelected.current = true
     setSelectedProfile(newProfile)
     try { localStorage.setItem('hermes_sqlite_memory_profile', newProfile) } catch (_) {}
   }
+
+  useEffect(() => {
+    if (!isManuallySelected.current && hostProfileName && hostProfileName !== 'default') {
+      const stored = typeof localStorage !== 'undefined' ? localStorage.getItem('hermes_sqlite_memory_profile') : null
+      if (!stored) {
+        setSelectedProfile(hostProfileName)
+      }
+    }
+  }, [hostProfileName])
 
   useEffect(() => {
     const el = containerRef.current

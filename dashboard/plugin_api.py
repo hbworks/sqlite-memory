@@ -19,10 +19,21 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _get_hermes_root() -> Path:
+    """Get the true ~/.hermes root directory, even when HERMES_HOME points to a profile."""
+    if "HERMES_HOME" in os.environ and os.environ["HERMES_HOME"].strip():
+        p = Path(os.path.expanduser(os.environ["HERMES_HOME"].strip()))
+        if "profiles" in p.parts:
+            parts = list(p.parts)
+            idx = parts.index("profiles")
+            return Path(*parts[:idx])
+    return Path(os.path.expanduser("~/.hermes"))
+
+
 def _get_available_profiles() -> List[str]:
     """List all available profiles."""
     profiles = ["default"]
-    p_dir = Path(os.path.expanduser("~/.hermes/profiles"))
+    p_dir = _get_hermes_root() / "profiles"
     if p_dir.is_dir():
         profiles.extend([p.name for p in sorted(p_dir.iterdir()) if p.is_dir() and not p.name.startswith(".")])
     return profiles
@@ -31,11 +42,17 @@ def _get_available_profiles() -> List[str]:
 def _get_db_path(profile: Optional[str] = None) -> Path:
     """Resolve database path for the requested profile."""
     prof = (profile or "").strip()
-    if not prof or prof in ("default", "main", "root", "~/.hermes"):
-        if "HERMES_HOME" in os.environ and os.environ["HERMES_HOME"].strip():
-            return Path(os.path.expanduser(os.environ["HERMES_HOME"].strip())) / "memory.db"
-        return Path(os.path.expanduser("~/.hermes/memory.db"))
-    return Path(os.path.expanduser(f"~/.hermes/profiles/{prof}/memory.db"))
+    root = _get_hermes_root()
+    # default / ~/.hermes / root / main が指定された場合は必ず ~/.hermes/memory.db
+    if prof in ("default", "main", "root", "~/.hermes"):
+        return root / "memory.db"
+    # 特定プロファイルが明示指定された場合
+    if prof:
+        return root / "profiles" / prof / "memory.db"
+    # 未指定の場合は現在の HERMES_HOME、なければ root / memory.db
+    if "HERMES_HOME" in os.environ and os.environ["HERMES_HOME"].strip():
+        return Path(os.path.expanduser(os.environ["HERMES_HOME"].strip())) / "memory.db"
+    return root / "memory.db"
 
 
 def _ensure_db_schema(conn: sqlite3.Connection) -> None:
