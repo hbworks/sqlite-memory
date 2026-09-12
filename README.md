@@ -8,6 +8,14 @@ Includes Web dashboard API definitions as well as a bundled Hermes Desktop GUI (
 
 ---
 
+## ⚖️ Why SQLite FTS5? (vs External Vector DBs)
+
+- **Daemonless & Container-Free**: No need to spin up or maintain external services like Qdrant, Milvus, or Redis. Operates entirely out of a single local `.db` file.
+- **Ultra-Lightweight & Fast**: Uses standard SQLite FTS5 full-text indexing, achieving sub-millisecond keyword and BM25-ranked memory recall with negligible RAM usage.
+- **Unified Package**: Bundles the Agent core logic, Web Dashboard API, and Desktop GUI in a single folder—installed and recognized automatically with zero configuration.
+
+---
+
 ## 📁 Directory Structure
 
 ```text
@@ -107,6 +115,14 @@ cp ~/.hermes/memory.db ~/.hermes/memory_backup.db
 Hermes Agent 向けのローカル完結型・ゼロ依存の永続メモリプラグインです。  
 Python 標準の `sqlite3` と FTS5 全文検索を用いて、セッションをまたいだ長期記憶と自動想起 (Prefetch) を提供します。  
 Hermes Web ダッシュボード用の API に加え、Hermes Desktop 用の GUI プラグイン（Unified Package）も同梱されています。
+
+---
+
+## ⚖️ なぜ外部ベクトルDBではなく SQLite FTS5 なのか？
+
+- **デーモン・コンテナ不要**: Qdrant や Milvus、Redis 等の外部サーバーを常駐させる必要がなく、単一のローカル `.db` ファイルのみで完結。
+- **超軽量・省メモリ・ミリ秒検索**: Python 標準の SQLite FTS5（全文検索エンジン）を活用し、メモリフットプリントを最小限に抑えながら BM25 スコアによる高速想起を実現。
+- **Unified Package（ワンストップ導入）**: Agent コアロジック、Web ダッシュボード API、Desktop 用 GUI が 1 つのディレクトリにパッケージ化されており、配置するだけで即座に GUI 付きで動作。
 
 ---
 
