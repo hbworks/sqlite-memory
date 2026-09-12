@@ -1,5 +1,5 @@
 {
-  "name": "sqlite_memory",
+  "name": "sqlite-memory",
   "label": "Memory",
   "description": "Local SQLite persistent memory browser — search, view, create, edit, and delete long-term agent memories.",
   "icon": "Bookmark",

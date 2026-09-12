@@ -9,7 +9,7 @@ from plugins.memory.config_schema import (
 )
 
 CONFIG_SCHEMA = ProviderConfigSchema(
-    name="sqlite_memory",
+    name="sqlite-memory",
     label="SQLite Persistent Memory",
     fields=(
         ProviderField(

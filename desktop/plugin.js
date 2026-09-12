@@ -36,7 +36,7 @@ async function api(path, options = {}) {
     ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
     ...(options.headers || {})
   }
-  const fullUrl = path.startsWith('/api') ? path : `/api/plugins/sqlite_memory${path.startsWith('/') ? path : '/' + path}`
+  const fullUrl = path.startsWith('/api') ? path : `/api/plugins/sqlite-memory${path.startsWith('/') ? path : '/' + path}`
   const res = await fetch(fullUrl, { ...options, headers })
   if (!res.ok) throw new Error(`API error ${res.status}: ${await res.text()}`)
   return await res.json()
@@ -601,7 +601,7 @@ function MemoryManagementPage() {
 }
 
 export default {
-  id: 'sqlite_memory',
+  id: 'sqlite-memory',
   name: 'Persistent Memory',
   description: 'SQLite-backed persistent long-term memory browser and manager.',
   defaultEnabled: true,

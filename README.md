@@ -9,7 +9,7 @@ Hermes Web ダッシュボード用の API に加え、Hermes Desktop 用の GUI
 ## 📁 構成ファイル
 
 ```text
-sqlite_memory/
+sqlite-memory/
 ├── __init__.py          # プラグイン本体 (MemoryProvider 実装)
 ├── config_schema.py     # UI/設定定義スキーマ
 ├── plugin.yaml          # プラグイン定義マニフェスト
@@ -33,21 +33,21 @@ Hermes Agent のプラグインディレクトリ `~/.hermes/plugins/` に配置
 mkdir -p ~/.hermes/plugins
 
 # コピーして配置する場合
-cp -r ./sqlite_memory ~/.hermes/plugins/
+cp -r ./sqlite-memory ~/.hermes/plugins/
 
 # またはシンボリックリンクで配置する場合（推奨）
-ln -s "$(pwd)/sqlite_memory" ~/.hermes/plugins/sqlite_memory
+ln -s "$(pwd)/sqlite-memory" ~/.hermes/plugins/sqlite-memory
 ```
 
 > [!TIP]
 > **Unified Package について:**
-> `~/.hermes/plugins/sqlite_memory/desktop/plugin.js` に Desktop 用 GUI が同梱されているため、Hermes Desktop は自動的にこの GUI を認識します。
-> （個別に Desktop プラグインとして配置したい場合は `sqlite-memory-gui/` または本フォルダ内の `desktop/plugin.js` を `~/.hermes/desktop-plugins/sqlite_memory/plugin.js` に配置することも可能です）
+> `~/.hermes/plugins/sqlite-memory/desktop/plugin.js` に Desktop 用 GUI が同梱されているため、Hermes Desktop は自動的にこの GUI を認識します。
+> （個別に Desktop プラグインとして配置したい場合も、本フォルダ内の `desktop/plugin.js` を `~/.hermes/desktop-plugins/sqlite-memory/plugin.js` に配置することで利用可能です）
 
 ※ バンドル標準（全プロファイル共通）として配置したい場合：
 ```bash
-mkdir -p ~/.hermes/hermes-agent/plugins/memory/sqlite_memory
-cp -r ./sqlite_memory/* ~/.hermes/hermes-agent/plugins/memory/sqlite_memory/
+mkdir -p ~/.hermes/hermes-agent/plugins/memory/sqlite-memory
+cp -r ./sqlite-memory/* ~/.hermes/hermes-agent/plugins/memory/sqlite-memory/
 ```
 
 ### 2. 設定ファイル (`config.yaml`) の編集
@@ -57,8 +57,8 @@ cp -r ./sqlite_memory/* ~/.hermes/hermes-agent/plugins/memory/sqlite_memory/
 ```yaml
 memory:
   memory_enabled: true
-  provider: sqlite_memory
-  sqlite_memory:
+  provider: sqlite-memory
+  sqlite-memory:
     db_path: "~/.hermes/memory.db"
     auto_extract: true
     max_recall: 5

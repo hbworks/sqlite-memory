@@ -1,4 +1,4 @@
-name: sqlite_memory
+name: sqlite-memory
 label: Persistent Memory (SQLite)
 version: 1.0.0
 description: Zero-dependency local persistent long-term memory for Hermes Agent.
