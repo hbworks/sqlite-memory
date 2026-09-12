@@ -376,8 +376,7 @@ class SQLiteMemoryProvider(MemoryProvider):
             return
 
         explicit_patterns = [
-            r"(?:remember\s+(?:that|to)?\s*:?\s*)(.+)",
-            r"(?:please\s+remember\s*:?\s*)(.+)",
+            r"(?:(?:please\s+)?remember\s+(?:that|to)?\s*:?\s*)(.+)",
             r"(?:(?:これ|以下|次|私の好みを?)\s*覚えて(?:おいて|ください|ね)?\s*[:：]?\s*)(.+)",
             r"(?:(?:今後|次回から|これからは)\s*(.+)(?:にして|を使って|でやって))",
         ]
@@ -388,6 +387,7 @@ class SQLiteMemoryProvider(MemoryProvider):
                 item = m.group(1).strip()
                 self.add_memory(content=item, category="preference", source="auto_extract")
                 logger.info("SQLiteMemoryProvider auto-extracted memory: %s", item)
+                break
 
     def on_memory_write(self, action: str, target: str, content: str) -> None:
         if action in {"add", "replace"} and content:
