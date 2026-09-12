@@ -18,34 +18,74 @@ import { jsx, jsxs } from 'react/jsx-runtime'
 let _rest = null
 
 async function api(path, options = {}) {
-  if (_rest) {
+  const cleanPath = path.startsWith('/') ? path : '/' + path
+
+  // 1. Electron 環境の正規 IPC ブリッジ（window.hermesDesktop.api）を最優先
+  if (typeof window !== 'undefined' && window.hermesDesktop?.api) {
+    let body = options.body
+    if (typeof body === 'string') {
+      try { body = JSON.parse(body) } catch (_) {}
+    }
+    const method = options.method || 'GET'
+
+    // まず /api/plugins/sqlite-memory を試行
     try {
-      const clean = path.startsWith('/') ? path.slice(1) : path
-      const [route, queryStr] = clean.split('?')
-      const params = {}
-      if (queryStr) new URLSearchParams(queryStr).forEach((v, k) => { params[k] = v })
-      return await _rest(clean, { ...options, params: { ...(options.params || {}), ...params } })
-    } catch (e) {
-      console.warn('ctx.rest error, falling back to fetch:', e)
+      return await window.hermesDesktop.api({
+        path: `/api/plugins/sqlite-memory${cleanPath}`,
+        method,
+        body
+      })
+    } catch (err1) {
+      // 404等の場合は互換エンドポイント /api/plugins/sqlite_memory を試行
+      try {
+        return await window.hermesDesktop.api({
+          path: `/api/plugins/sqlite_memory${cleanPath}`,
+          method,
+          body
+        })
+      } catch (err2) {
+        throw err1
+      }
     }
   }
 
+  // 2. SDK の ctx.rest が利用可能な場合
+  if (_rest) {
+    try {
+      const relPath = cleanPath.startsWith('/') ? cleanPath.slice(1) : cleanPath
+      const [route, queryStr] = relPath.split('?')
+      const params = {}
+      if (queryStr) new URLSearchParams(queryStr).forEach((v, k) => { params[k] = v })
+      return await _rest(relPath, { ...options, params: { ...(options.params || {}), ...params } })
+    } catch (e) {
+      console.warn('ctx.rest failed, falling back to fetch:', e)
+    }
+  }
+
+  // 3. ブラウザ / Web UI 環境での fetch フォールバック
   const token = typeof window !== 'undefined' ? (window.__HERMES_SESSION_TOKEN__ || '') : ''
   const headers = {
     'Content-Type': 'application/json',
     ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
     ...(options.headers || {})
   }
-  const fullUrl = path.startsWith('/api') ? path : `/api/plugins/sqlite-memory${path.startsWith('/') ? path : '/' + path}`
+  const fullUrl = cleanPath.startsWith('/api') ? cleanPath : `/api/plugins/sqlite-memory${cleanPath}`
   const res = await fetch(fullUrl, { ...options, headers })
   if (!res.ok) throw new Error(`API error ${res.status}: ${await res.text()}`)
   return await res.json()
 }
 
 const getLocale = () => {
-  if (typeof navigator === 'undefined') return 'en';
-  return (navigator.language || navigator.userLanguage || '').toLowerCase().startsWith('ja') ? 'ja' : 'en';
-};
+  if (typeof document !== 'undefined') {
+    const docLang = document.documentElement?.lang || document.documentElement?.getAttribute('lang')
+    if (docLang && docLang.toLowerCase().startsWith('ja')) return 'ja'
+  }
+  if (typeof navigator !== 'undefined') {
+    const langs = navigator.languages || [navigator.language || navigator.userLanguage || '']
+    if (langs.some((l) => l && l.toLowerCase().startsWith('ja'))) return 'ja'
+  }
+  return 'en'
+}
 
 const I18N = {
   ja: {
@@ -82,7 +122,9 @@ const I18N = {
     deleteConfirm: (id) => `Memory #${id} を削除しますか？`,
     saveError: (m) => `保存エラー: ${m}`,
     deleteError: (m) => `削除エラー: ${m}`,
-    defaultProfileLabel: 'デフォルト (~/.hermes)'
+    defaultProfileLabel: 'デフォルト (~/.hermes)',
+    profileLabel: 'プロファイル:',
+    storageLabel: '保存先:'
   },
   en: {
     preference: 'Preference',
@@ -118,7 +160,9 @@ const I18N = {
     deleteConfirm: (id) => `Delete Memory #${id}?`,
     saveError: (m) => `Save error: ${m}`,
     deleteError: (m) => `Delete error: ${m}`,
-    defaultProfileLabel: 'Default (~/.hermes)'
+    defaultProfileLabel: 'Default (~/.hermes)',
+    profileLabel: 'Profile:',
+    storageLabel: 'Storage:'
   }
 };
 
@@ -249,8 +293,17 @@ function MemoryManagementPage() {
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
   const [selectedCategory, setSelectedCategory] = useState('all')
-  const [selectedProfile, setSelectedProfile] = useState('default')
-  const [availableProfiles, setAvailableProfiles] = useState(['default'])
+
+  const getInitialProfile = () => {
+    try {
+      const stored = typeof localStorage !== 'undefined' ? localStorage.getItem('hermes_sqlite_memory_profile') : null
+      if (stored) return stored
+    } catch (_) {}
+    return 'assistant'
+  }
+
+  const [selectedProfile, setSelectedProfile] = useState(getInitialProfile)
+  const [availableProfiles, setAvailableProfiles] = useState(['assistant', 'buddy', 'coding', 'research', 'default'])
   const [selectedId, setSelectedId] = useState(null)
   const [total, setTotal] = useState(0)
   const [categories, setCategories] = useState({})
@@ -264,12 +317,20 @@ function MemoryManagementPage() {
   const [mobileDetailOpen, setMobileDetailOpen] = useState(false)
 
   const containerRef = useRef(null)
-  const focusedProfileAtom = host.state.focusedSessionProfile || host.state.profile
-  const hostProfileName = useValue(focusedProfileAtom) || 'default'
+  const focusedProfileAtom = host.state?.focusedSessionProfile || host.state?.profile
+  const hostProfileName = useValue(focusedProfileAtom)
 
   useEffect(() => {
-    if (hostProfileName && hostProfileName !== 'default') setSelectedProfile(hostProfileName)
+    if (hostProfileName && hostProfileName !== 'default') {
+      setSelectedProfile(hostProfileName)
+      try { localStorage.setItem('hermes_sqlite_memory_profile', hostProfileName) } catch (_) {}
+    }
   }, [hostProfileName])
+
+  const handleSelectProfile = (newProfile) => {
+    setSelectedProfile(newProfile)
+    try { localStorage.setItem('hermes_sqlite_memory_profile', newProfile) } catch (_) {}
+  }
 
   useEffect(() => {
     const el = containerRef.current
@@ -461,15 +522,15 @@ function MemoryManagementPage() {
           jsxs('div', {
             style: { ...S.flexRow, gap: '8px', minWidth: 0 },
             children: [
-              jsx('span', { style: { fontWeight: 500, color: '#374151' }, children: 'Profile:' }),
+              jsx('span', { style: { fontWeight: 500, color: '#374151' }, children: t.profileLabel }),
               jsx('select', {
                 value: selectedProfile,
-                onChange: (e) => setSelectedProfile(e.target.value),
+                onChange: (e) => handleSelectProfile(e.target.value),
                 style: { padding: '2px 6px', borderRadius: '4px', border: '1px solid #d1d5db', backgroundColor: '#ffffff', fontSize: '11px', fontWeight: 600, color: '#111827', cursor: 'pointer', outline: 'none' },
                 children: availableProfiles.map((p) => jsx('option', { key: p, value: p, children: p === 'default' ? t.defaultProfileLabel : p }, p))
               }),
               jsx('span', { style: { color: '#d1d5db' }, children: '•' }),
-              jsx('span', { style: { color: '#6b7280' }, children: 'Storage:' }),
+              jsx('span', { style: { color: '#6b7280' }, children: t.storageLabel }),
               jsx('span', { style: { fontWeight: 500, color: '#111827', ...S.ellipsis, maxWidth: '320px' }, title: dbPath || 'SQLite (~/.hermes/memory.db)', children: dbPath ? `SQLite (${dbPath})` : 'SQLite (~/.hermes/memory.db)' })
             ]
           }),
