@@ -291,6 +291,9 @@ const S = {
 }
 
 function MemoryManagementPage() {
+  const t = I18N[getLocale()] || I18N.en
+  const categoryStyles = getCategoryStyles()
+
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
@@ -407,7 +410,7 @@ function MemoryManagementPage() {
       const endpoint = editId ? `/memories/${editId}` : '/memories'
       await api(`${endpoint}?profile=${encodeURIComponent(selectedProfile)}`, {
         method,
-        body: JSON.stringify({ content: formContent.trim(), category: formCategory })
+        body: { content: formContent.trim(), category: formCategory }
       })
       setShowAddModal(false)
       setEditId(null)
@@ -415,14 +418,13 @@ function MemoryManagementPage() {
       await Promise.all([loadStats(), loadMemories()])
     } catch (err) {
       console.error('Error saving memory:', err)
-      alert(I18N[getLocale()]?.saveError(err.message) || `Save error: ${err.message}`)
+      alert(t.saveError(err.message))
     } finally {
       setSaving(false)
     }
   }
 
   const handleDelete = async (id) => {
-    const t = I18N[getLocale()] || I18N.en
     if (!confirm(t.deleteConfirm(id))) return
     try {
       await api(`/memories/${id}?profile=${encodeURIComponent(selectedProfile)}`, { method: 'DELETE' })
@@ -442,7 +444,6 @@ function MemoryManagementPage() {
     setShowAddModal(true)
   }
 
-  const t = I18N[getLocale()] || I18N.en
   const categoryPills = [
     { key: 'all', label: t.all, count: total },
     { key: 'preference', label: t.preference, count: categories['preference'] || 0 },
