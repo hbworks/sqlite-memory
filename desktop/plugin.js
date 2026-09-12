@@ -177,6 +177,8 @@ const getCategoryStyles = () => {
   };
 };
 
+const CATEGORY_STYLES = getCategoryStyles();
+
 const renderBadge = (catKey) => {
   const styles = getCategoryStyles();
   const cat = styles[catKey] || styles.general;
@@ -580,7 +582,8 @@ function MemoryManagementPage() {
               ) : (
                 items.map((item) => {
                   const isSelected = item.id === selectedId
-                  const cat = CATEGORY_STYLES[item.category] || CATEGORY_STYLES.general
+                  const catStyles = getCategoryStyles()
+                  const cat = catStyles[item.category] || catStyles.general
                   return jsxs('div', {
                     key: item.id,
                     onClick: () => handleSelectItem(item.id),
