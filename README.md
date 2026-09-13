@@ -68,7 +68,7 @@ Add the following to `~/.hermes/config.yaml` or your profile's `config.yaml`:
 memory:
   memory_enabled: true
   provider: sqlite-memory
-  sqlite-memory:
+  sqlite-memory: # (Both "sqlite-memory" and "sqlite_memory" are supported)
     db_path: "~/.hermes/memory.db"
     auto_extract: true
     max_recall: 5
@@ -178,7 +178,7 @@ cp -r ./sqlite-memory/* ~/.hermes/hermes-agent/plugins/memory/sqlite-memory/
 memory:
   memory_enabled: true
   provider: sqlite-memory
-  sqlite-memory:
+  sqlite-memory: # (互換性のため "sqlite-memory" と "sqlite_memory" の両記法に対応)
     db_path: "~/.hermes/memory.db"
     auto_extract: true
     max_recall: 5

@@ -7,16 +7,46 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query, status as http_status
-from pydantic import BaseModel, Field
+try:
+    from fastapi import APIRouter, HTTPException, Query, status as http_status
+    from pydantic import BaseModel, Field
+except ImportError:
+    class HTTPException(Exception):  # type: ignore
+        def __init__(self, status_code: int = 400, detail: str = ""):
+            self.status_code = status_code
+            self.detail = detail
+            super().__init__(detail)
+
+    class http_status:  # type: ignore
+        HTTP_400_BAD_REQUEST = 400
+        HTTP_201_CREATED = 201
+
+    class APIRouter:  # type: ignore
+        def get(self, *args, **kwargs): return lambda f: f
+        def post(self, *args, **kwargs): return lambda f: f
+        def put(self, *args, **kwargs): return lambda f: f
+        def delete(self, *args, **kwargs): return lambda f: f
+
+    def Query(default=None, **kwargs):  # type: ignore
+        return default
+
+    class BaseModel:  # type: ignore
+        pass
+
+    def Field(default=..., **kwargs):  # type: ignore
+        return default
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# 厳格なプロファイル名バリデーション用（英数字、ハイフン、アンダースコアのみ許可）
+_PROFILE_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 
 def _get_hermes_root() -> Path:
@@ -30,6 +60,52 @@ def _get_hermes_root() -> Path:
     return Path(os.path.expanduser("~/.hermes"))
 
 
+def _validate_profile(profile: Optional[str]) -> str:
+    """Validate and sanitize profile name to prevent path traversal."""
+    if not profile:
+        return ""
+    prof = profile.strip()
+    if not prof:
+        return ""
+    if prof in ("default", "main", "root", "~/.hermes"):
+        return prof
+    if not _PROFILE_RE.match(prof):
+        raise HTTPException(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid profile name '{prof}': only alphanumeric characters, underscores, and hyphens are allowed."
+        )
+    return prof
+
+
+def _read_config_db_path(config_file: Path) -> Optional[Path]:
+    """Read sqlite_memory or sqlite-memory db_path from a config.yaml file."""
+    if not config_file.is_file():
+        return None
+    try:
+        try:
+            import yaml
+            with open(config_file, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+            memory_cfg = data.get("memory", {})
+            if isinstance(memory_cfg, dict):
+                p = (
+                    memory_cfg.get("sqlite_memory", {}).get("db_path")
+                    or memory_cfg.get("sqlite-memory", {}).get("db_path")
+                )
+                if p:
+                    return Path(os.path.expanduser(str(p)))
+        except ImportError:
+            content = config_file.read_text(encoding="utf-8")
+            match = re.search(r"(?:sqlite_memory|sqlite-memory)[\s\S]*?db_path:\s*([^\r\n#]+)", content)
+            if match:
+                val = match.group(1).strip().strip('"\'')
+                if val:
+                    return Path(os.path.expanduser(val))
+    except Exception as e:
+        logger.debug("Failed to read config from %s: %s", config_file, e)
+    return None
+
+
 def _get_available_profiles() -> List[str]:
     """List all available profiles."""
     profiles = ["default"]
@@ -40,23 +116,46 @@ def _get_available_profiles() -> List[str]:
 
 
 def _get_db_path(profile: Optional[str] = None) -> Path:
-    """Resolve database path for the requested profile."""
-    prof = (profile or "").strip()
+    """Resolve database path for the requested profile safely with config support and boundary checks."""
+    prof = _validate_profile(profile)
     root = _get_hermes_root()
-    # default / ~/.hermes / root / main が指定された場合は必ず ~/.hermes/memory.db
+
+    # 1. default / main / root / ~/.hermes が指定された場合
     if prof in ("default", "main", "root", "~/.hermes"):
-        return root / "memory.db"
-    # 特定プロファイルが明示指定された場合
+        cfg_path = _read_config_db_path(root / "config.yaml")
+        return cfg_path if cfg_path else root / "memory.db"
+
+    # 2. 特定プロファイルが明示指定された場合
     if prof:
-        return root / "profiles" / prof / "memory.db"
-    # 未指定の場合は現在の HERMES_HOME、なければ root / memory.db
+        prof_dir = root / "profiles" / prof
+        cfg_path = _read_config_db_path(prof_dir / "config.yaml") or _read_config_db_path(root / "config.yaml")
+        if cfg_path:
+            return cfg_path
+
+        target_path = prof_dir / "memory.db"
+        # パストラバーサル境界チェック
+        resolved = target_path.resolve()
+        try:
+            resolved.relative_to(root.resolve())
+        except ValueError:
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail="Path traversal detected: target database is outside Hermes root."
+            )
+        return target_path
+
+    # 3. 未指定の場合（現在の HERMES_HOME または root）
     if "HERMES_HOME" in os.environ and os.environ["HERMES_HOME"].strip():
-        return Path(os.path.expanduser(os.environ["HERMES_HOME"].strip())) / "memory.db"
-    return root / "memory.db"
+        h_home = Path(os.path.expanduser(os.environ["HERMES_HOME"].strip()))
+        cfg_path = _read_config_db_path(h_home / "config.yaml") or _read_config_db_path(root / "config.yaml")
+        return cfg_path if cfg_path else h_home / "memory.db"
+
+    cfg_path = _read_config_db_path(root / "config.yaml")
+    return cfg_path if cfg_path else root / "memory.db"
 
 
 def _ensure_db_schema(conn: sqlite3.Connection) -> None:
-    """Ensure memories tables exist."""
+    """Ensure memories tables exist, register FTS triggers, and rebuild FTS if out of sync."""
     with conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS memories (
@@ -74,6 +173,38 @@ def _ensure_db_schema(conn: sqlite3.Connection) -> None:
                 content, category, content='memories', content_rowid='id'
             );
         """)
+        # Agent 側と同一の 3 つの同期トリガーを追加
+        conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+                INSERT INTO memories_fts(rowid, content, category)
+                VALUES (new.id, new.content, new.category);
+            END;
+        """)
+        conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+                INSERT INTO memories_fts(memories_fts, rowid, content, category)
+                VALUES ('delete', old.id, old.content, old.category);
+            END;
+        """)
+        conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+                INSERT INTO memories_fts(memories_fts, rowid, content, category)
+                VALUES ('delete', old.id, old.content, old.category);
+                INSERT INTO memories_fts(rowid, content, category)
+                VALUES (new.id, new.content, new.category);
+            END;
+        """)
+
+        # 既存レコードの FTS 同期チェック＆再構築
+        try:
+            mem_row = conn.execute("SELECT COUNT(*) FROM memories").fetchone()
+            mem_count = mem_row[0] if mem_row else 0
+            doc_row = conn.execute("SELECT COUNT(*) FROM memories_fts_docsize").fetchone()
+            doc_count = doc_row[0] if doc_row else 0
+            if mem_count != doc_count:
+                conn.execute("INSERT INTO memories_fts(memories_fts) VALUES('rebuild');")
+        except Exception as e:
+            logger.debug("Notice during FTS integrity check: %s", e)
 
 
 @contextmanager

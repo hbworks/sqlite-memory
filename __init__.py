@@ -132,10 +132,14 @@ def _get_hermes_home_dir() -> Path:
 
 
 def _get_configured_db_path() -> Path:
-    """Read custom DB path from config or fallback to default."""
+    """Read custom DB path from config (supporting both sqlite_memory and sqlite-memory) or fallback to default."""
     try:
         from hermes_cli.config import load_config, cfg_get
-        custom_path = cfg_get(load_config(), "memory", "sqlite_memory", "db_path", default="")
+        config = load_config()
+        custom_path = (
+            cfg_get(config, "memory", "sqlite_memory", "db_path", default="")
+            or cfg_get(config, "memory", "sqlite-memory", "db_path", default="")
+        )
         if custom_path:
             return Path(os.path.expanduser(str(custom_path)))
     except Exception:
@@ -230,6 +234,15 @@ class SQLiteMemoryProvider(MemoryProvider):
                             VALUES (new.id, new.content, new.category);
                         END;
                     """)
+                    try:
+                        mem_row = conn.execute("SELECT COUNT(*) FROM memories").fetchone()
+                        mem_count = mem_row[0] if mem_row else 0
+                        doc_row = conn.execute("SELECT COUNT(*) FROM memories_fts_docsize").fetchone()
+                        doc_count = doc_row[0] if doc_row else 0
+                        if mem_count != doc_count:
+                            conn.execute("INSERT INTO memories_fts(memories_fts) VALUES('rebuild');")
+                    except Exception as rebuild_err:
+                        logger.debug("Notice during FTS integrity check: %s", rebuild_err)
                 conn.close()
                 self._initialized = True
             except Exception as e:
@@ -253,10 +266,23 @@ class SQLiteMemoryProvider(MemoryProvider):
         try:
             from hermes_cli.config import load_config, cfg_get
             config = load_config()
-            custom_path = cfg_get(config, "memory", "sqlite_memory", "db_path", default="")
+            custom_path = (
+                cfg_get(config, "memory", "sqlite_memory", "db_path", default="")
+                or cfg_get(config, "memory", "sqlite-memory", "db_path", default="")
+            )
             self._db_path = Path(os.path.expanduser(str(custom_path))) if custom_path else _get_configured_db_path()
-            self._auto_extract = str(cfg_get(config, "memory", "sqlite_memory", "auto_extract", default="true")).lower() in ("true", "1", "yes")
-            self._max_recall = int(cfg_get(config, "memory", "sqlite_memory", "max_recall", default=5))
+            auto_ext = (
+                cfg_get(config, "memory", "sqlite_memory", "auto_extract", default=None)
+                if cfg_get(config, "memory", "sqlite_memory", "auto_extract", default=None) is not None
+                else cfg_get(config, "memory", "sqlite-memory", "auto_extract", default="true")
+            )
+            self._auto_extract = str(auto_ext).lower() in ("true", "1", "yes")
+            max_rec = (
+                cfg_get(config, "memory", "sqlite_memory", "max_recall", default=None)
+                if cfg_get(config, "memory", "sqlite_memory", "max_recall", default=None) is not None
+                else cfg_get(config, "memory", "sqlite-memory", "max_recall", default=5)
+            )
+            self._max_recall = int(max_rec)
         except Exception:
             self._db_path = _get_configured_db_path()
 

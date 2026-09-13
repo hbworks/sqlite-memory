@@ -52,11 +52,9 @@ async function api(path, options = {}) {
   // 2. SDK の ctx.rest が利用可能な場合
   if (_rest) {
     try {
+      // 公式仕様: クエリパラメータを分解せず、パス文字列自体に含めて渡す
       const relPath = cleanPath.startsWith('/') ? cleanPath.slice(1) : cleanPath
-      const [route, queryStr] = relPath.split('?')
-      const params = {}
-      if (queryStr) new URLSearchParams(queryStr).forEach((v, k) => { params[k] = v })
-      return await _rest(relPath, { ...options, params: { ...(options.params || {}), ...params } })
+      return await _rest(relPath, options)
     } catch (e) {
       console.warn('ctx.rest failed, falling back to fetch:', e)
     }
@@ -70,7 +68,13 @@ async function api(path, options = {}) {
     ...(options.headers || {})
   }
   const fullUrl = cleanPath.startsWith('/api') ? cleanPath : `/api/plugins/sqlite-memory${cleanPath}`
-  const res = await fetch(fullUrl, { ...options, headers })
+  const requestOptions = { ...options, headers }
+  if (requestOptions.body && typeof requestOptions.body !== 'string') {
+    try {
+      requestOptions.body = JSON.stringify(requestOptions.body)
+    } catch (_) {}
+  }
+  const res = await fetch(fullUrl, requestOptions)
   if (!res.ok) throw new Error(`API error ${res.status}: ${await res.text()}`)
   return await res.json()
 }
@@ -706,7 +710,7 @@ function MemoryManagementPage() {
                   jsxs('div', {
                     style: { ...S.flexCol, gap: '4px' },
                     children: [
-                      jsx('label', { style: { fontSize: '11px', fontWeight: 500, color: '#374151' }, children: t.modalCategoryLabel }),
+                      jsx('label', { style: { fontSize: '11px', fontWeight: 500, color: '#374151' }, children: t.category }),
                       jsx('select', {
                         value: formCategory,
                         onChange: (e) => setFormCategory(e.target.value),
@@ -723,7 +727,7 @@ function MemoryManagementPage() {
                   jsxs('div', {
                     style: { ...S.flexCol, gap: '4px' },
                     children: [
-                      jsx('label', { style: { fontSize: '11px', fontWeight: 500, color: '#374151' }, children: t.modalContentLabel }),
+                      jsx('label', { style: { fontSize: '11px', fontWeight: 500, color: '#374151' }, children: t.contentLabel }),
                       jsx('textarea', {
                         rows: 5,
                         required: true,
@@ -763,7 +767,7 @@ export default {
   defaultEnabled: true,
   register(ctx) {
     _rest = ctx.rest
-    ctx.registerMany([
+    return ctx.registerMany([
       {
         id: 'memory-page',
         area: ROUTES_AREA,
