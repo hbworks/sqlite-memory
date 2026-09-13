@@ -88,19 +88,10 @@ async function api(path, options = {}) {
   return await res.json()
 }
 
-/**
- * UIのロケールを取得 (ja または en)
- */
 const getLocale = () => {
-  if (typeof document !== 'undefined') {
-    const docLang = document.documentElement?.lang || document.documentElement?.getAttribute('lang')
-    if (docLang && docLang.toLowerCase().startsWith('ja')) return 'ja'
-  }
-  if (typeof navigator !== 'undefined') {
-    const langs = navigator.languages || [navigator.language || navigator.userLanguage || '']
-    if (langs.some((l) => l && l.toLowerCase().startsWith('ja'))) return 'ja'
-  }
-  return 'en'
+  const isJa = (s) => typeof s === 'string' && s.toLowerCase().startsWith('ja')
+  return (typeof document !== 'undefined' && isJa(document.documentElement?.lang)) ||
+         (typeof navigator !== 'undefined' && (navigator.languages || [navigator.language]).some(isJa)) ? 'ja' : 'en'
 }
 
 /**
