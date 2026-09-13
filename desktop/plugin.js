@@ -88,107 +88,54 @@ async function api(path, options = {}) {
   return await res.json()
 }
 
-const getLocale = () => {
-  const isJa = (s) => typeof s === 'string' && s.toLowerCase().startsWith('ja')
-  return (typeof document !== 'undefined' && isJa(document.documentElement?.lang)) ||
-         (typeof navigator !== 'undefined' && (navigator.languages || [navigator.language]).some(isJa)) ? 'ja' : 'en'
-}
-
-/**
- * 国際化辞書
- */
-const I18N = {
-  ja: {
-    preference: '設定・好み',
-    project: 'プロジェクト',
-    rule: 'ルール',
-    general: '一般',
-    all: 'すべて',
-    searchPlaceholder: '「Rust」などを検索',
-    addMemory: '記憶を追加',
-    category: 'カテゴリ',
-    totalCount: (t) => `合計: ${t} 件`,
-    refresh: '更新',
-    loading: '読み込み中...',
-    noMatches: '一致なし',
-    noMemories: '記憶がありません',
-    tryOtherKeyword: '別のキーワードをお試しください',
-    emptyHint: '「+ 記憶を追加」から登録できます',
-    backToList: '一覧に戻る',
-    edit: '編集',
-    delete: '削除',
-    created: '作成: ',
-    updated: '更新: ',
-    source: '登録元: ',
-    contentHeading: '記憶の内容',
-    selectPrompt: '左の一覧から記憶を選択してください',
-    editModalTitle: (id) => `Memory #${id} を編集`,
-    addModalTitle: '新しい記憶を追加',
-    contentLabel: '記憶内容',
-    placeholderExample: '例: このプロジェクトでは strict モードを有効にする',
-    cancel: 'キャンセル',
-    saving: '保存中...',
-    save: '保存する',
-    deleteConfirm: (id) => `Memory #${id} を削除しますか？`,
-    saveError: (m) => `保存エラー: ${m}`,
-    deleteError: (m) => `削除エラー: ${m}`,
-    defaultProfileLabel: 'デフォルト (~/.hermes)',
-    profileLabel: 'プロファイル:',
-    storageLabel: '保存先:'
-  },
-  en: {
-    preference: 'Preference',
-    project: 'Project',
-    rule: 'Rule',
-    general: 'General',
-    all: 'All',
-    searchPlaceholder: 'Search "Rust", etc...',
-    addMemory: 'Add Memory',
-    category: 'Category',
-    totalCount: (t) => `Total: ${t}`,
-    refresh: 'Refresh',
-    loading: 'Loading...',
-    noMatches: 'No matches found',
-    noMemories: 'No memories found',
-    tryOtherKeyword: 'Try a different keyword',
-    emptyHint: 'Add one using "+ Add Memory"',
-    backToList: 'Back to list',
-    edit: 'Edit',
-    delete: 'Delete',
-    created: 'Created: ',
-    updated: 'Updated: ',
-    source: 'Source: ',
-    contentHeading: 'Memory Content',
-    selectPrompt: 'Select a memory from the left list',
-    editModalTitle: (id) => `Edit Memory #${id}`,
-    addModalTitle: 'Add New Memory',
-    contentLabel: 'Memory Content',
-    placeholderExample: 'e.g., Always use strict mode for this project',
-    cancel: 'Cancel',
-    saving: 'Saving...',
-    save: 'Save',
-    deleteConfirm: (id) => `Delete Memory #${id}?`,
-    saveError: (m) => `Save error: ${m}`,
-    deleteError: (m) => `Delete error: ${m}`,
-    defaultProfileLabel: 'Default (~/.hermes)',
-    profileLabel: 'Profile:',
-    storageLabel: 'Storage:'
-  }
-}
+const t = {
+  preference: 'Preference',
+  project: 'Project',
+  rule: 'Rule',
+  general: 'General',
+  all: 'All',
+  searchPlaceholder: 'Search "Rust", etc...',
+  addMemory: 'Add Memory',
+  category: 'Category',
+  totalCount: (total) => `Total: ${total}`,
+  refresh: 'Refresh',
+  loading: 'Loading...',
+  noMatches: 'No matches found',
+  noMemories: 'No memories found',
+  tryOtherKeyword: 'Try a different keyword',
+  emptyHint: 'Add one using "+ Add Memory"',
+  backToList: 'Back to list',
+  edit: 'Edit',
+  delete: 'Delete',
+  created: 'Created: ',
+  updated: 'Updated: ',
+  source: 'Source: ',
+  contentHeading: 'Memory Content',
+  selectPrompt: 'Select a memory from the left list',
+  editModalTitle: (id) => `Edit Memory #${id}`,
+  addModalTitle: 'Add New Memory',
+  contentLabel: 'Memory Content',
+  placeholderExample: 'e.g., Always use strict mode for this project',
+  cancel: 'Cancel',
+  saving: 'Saving...',
+  save: 'Save',
+  deleteConfirm: (id) => `Delete Memory #${id}?`,
+  saveError: (m) => `Save error: ${m}`,
+  deleteError: (m) => `Delete error: ${m}`,
+  defaultProfileLabel: 'Default (~/.hermes)',
+  profileLabel: 'Profile:',
+  storageLabel: 'Storage:'
+};
 
 /**
  * カテゴリ別スタイル設定
  */
-const getCategoryStyles = () => {
-  const loc = getLocale()
-  const t = I18N[loc] || I18N.en
-  return {
-    preference: { label: t.preference, dot: '#6366f1', badgeBg: 'rgba(99, 102, 241, 0.1)', badgeColor: '#4f46e5' },
-    project:    { label: t.project,    dot: '#10b981', badgeBg: 'rgba(16, 185, 129, 0.1)', badgeColor: '#059669' },
-    rule:       { label: t.rule,       dot: '#f59e0b', badgeBg: 'rgba(245, 158, 11, 0.1)', badgeColor: '#d97706' },
-    general:    { label: t.general,    dot: '#8b5cf6', badgeBg: 'rgba(139, 92, 246, 0.1)', badgeColor: '#7c3aed' }
-  }
-}
+const getCategoryStyles = () => ({
+  preference: { label: t.preference, dot: '#6366f1', badgeBg: 'rgba(99, 102, 241, 0.1)', badgeColor: '#4f46e5' },
+  project:    { label: t.project,    dot: '#10b981', badgeBg: 'rgba(16, 185, 129, 0.1)', badgeColor: '#059669' },
+  rule:       { label: t.rule,       dot: '#f59e0b', badgeBg: 'rgba(245, 158, 11, 0.1)', badgeColor: '#d97706' },
+  general:    { label: t.general,    dot: '#8b5cf6', badgeBg: 'rgba(139, 92, 246, 0.1)', badgeColor: '#7c3aed' }
+})
 
 /**
  * カテゴリバッジの描画ヘルパー
@@ -235,7 +182,7 @@ const parseUtcDate = (val) => {
 
 const formatLocalTime = (val) => {
   const d = parseUtcDate(val)
-  if (!d) return val || '不明'
+  if (!d) return val || 'Unknown'
   const pad = (n) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
@@ -425,7 +372,6 @@ function useMemoryState() {
     e.preventDefault()
     if (!formContent.trim()) return
     setSaving(true)
-    const t = I18N[getLocale()] || I18N.en
     try {
       const method = editId ? 'PUT' : 'POST'
       const endpoint = editId ? `/memories/${editId}` : '/memories'
@@ -447,7 +393,6 @@ function useMemoryState() {
 
   // 削除処理
   const handleDelete = async (id) => {
-    const t = I18N[getLocale()] || I18N.en
     if (!confirm(t.deleteConfirm(id))) return
     try {
       await api(`/memories/${id}?profile=${encodeURIComponent(selectedProfile)}`, { method: 'DELETE' })
@@ -475,7 +420,6 @@ function useMemoryState() {
     loadMemories()
   }
 
-  const t = I18N[getLocale()] || I18N.en
   const categoryPills = [
     { key: 'all', label: t.all, count: total },
     { key: 'preference', label: t.preference, count: categories['preference'] || 0 },
@@ -534,8 +478,6 @@ function MemoryTopHeader({
   onSelectCategory,
   onOpenAddModal
 }) {
-  const t = I18N[getLocale()] || I18N.en
-
   return jsxs('div', {
     style: { padding: '14px 18px 10px 18px', borderBottom: '1px solid var(--border, #e5e7eb)', ...S.flexCol, gap: '10px', flexShrink: 0 },
     children: [
@@ -617,8 +559,6 @@ function MemorySubBar({
   total,
   onReload
 }) {
-  const t = I18N[getLocale()] || I18N.en
-
   return jsxs('div', {
     style: { ...S.flexBetween, padding: '6px 18px', backgroundColor: '#fafafa', borderBottom: '1px solid var(--border, #e5e7eb)', fontSize: '11px', color: '#6b7280', flexShrink: 0 },
     children: [
@@ -710,8 +650,6 @@ function MemoryListColumn({
   onSelectItem,
   isCompact
 }) {
-  const t = I18N[getLocale()] || I18N.en
-
   return jsx('div', {
     style: {
       display: 'flex',
@@ -756,8 +694,6 @@ function MemoryDetailColumn({
   isCompact,
   onBackToList
 }) {
-  const t = I18N[getLocale()] || I18N.en
-
   return jsx('div', {
     style: { flex: 1, overflowY: 'auto', padding: '20px 24px', backgroundColor: 'var(--background, #ffffff)', height: '100%', boxSizing: 'border-box' },
     children: activeMemory ? (
@@ -832,8 +768,6 @@ function MemoryEditModal({
   onSave,
   onClose
 }) {
-  const t = I18N[getLocale()] || I18N.en
-
   // Escapeキーで閉じる
   useEffect(() => {
     if (!isOpen) return
