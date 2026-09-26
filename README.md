@@ -52,7 +52,8 @@ ln -s "$(pwd)/sqlite-memory" ~/.hermes/plugins/sqlite-memory
 > [!TIP]
 > **Unified Package:**
 > Because the desktop GUI is bundled under `~/.hermes/plugins/sqlite-memory/desktop/plugin.js`, Hermes Desktop automatically detects and loads the memory GUI without requiring manual separate installation.
-> (If you prefer standalone desktop installation, you can also place `desktop/plugin.js` directly under `~/.hermes/desktop-plugins/sqlite-memory/plugin.js`).
+> **Install only one Desktop copy.** Do not also copy this file under a second Desktop plugin directory (for example, `sqlite_memory`): every copy exports `id: 'sqlite-memory'`, regardless of its folder name, so Hermes rejects the later one as a duplicate. If you choose standalone installation instead, keep exactly one `sqlite-memory/plugin.js` under `~/.hermes/desktop-plugins/`.
+> If a duplicate-ID toast appears, disable/remove the extra source package or standalone copy (not only a generated unified-package copy, which can be recreated), then run **⌘K → Reload desktop plugins**.
 
 ※ To install as a core/system-wide bundle across all profiles:
 ```bash
@@ -162,7 +163,8 @@ ln -s "$(pwd)/sqlite-memory" ~/.hermes/plugins/sqlite-memory
 > [!TIP]
 > **Unified Package について:**
 > `~/.hermes/plugins/sqlite-memory/desktop/plugin.js` に Desktop 用 GUI が同梱されているため、Hermes Desktop は自動的にこの GUI を認識します。  
-> （個別に Desktop プラグインとして配置したい場合も、本フォルダ内の `desktop/plugin.js` を `~/.hermes/desktop-plugins/sqlite-memory/plugin.js` に配置することで利用可能です）
+> **Desktop 用コピーは 1 つだけにしてください。** 同じファイルを `sqlite_memory` など別名の Desktop プラグインフォルダにも配置しないでください。フォルダ名にかかわらず各コピーの ID は `sqlite-memory` のため、重複すると後続の読み込みが拒否されます。Standalone 方式を選ぶ場合は、`~/.hermes/desktop-plugins/` 内に `sqlite-memory/plugin.js` を 1 つだけ配置してください。
+> duplicate-ID の通知が出た場合は、生成済みコピーだけでなく重複元の package または standalone コピーも無効化して 1 つにし、**⌘K → Reload desktop plugins** を実行してください。
 
 ※ バンドル標準（全プロファイル共通）として配置したい場合：
 ```bash
