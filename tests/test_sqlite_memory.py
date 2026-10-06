@@ -28,6 +28,21 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
+    def test_config_schema_matches_memory_setup_contract(self):
+        """Memory setup expects a list of field dictionaries, not the UI schema object."""
+        from types import SimpleNamespace
+
+        schema = SimpleNamespace(fields=(
+            SimpleNamespace(key="db_path", label="Database Path", description="Path", default="~/memory.db", kind="text", is_secret=False, env_key=None),
+            SimpleNamespace(key="auto_extract", label="Auto Extract", description="Extract", default="true", kind="bool", is_secret=False, env_key=None),
+            SimpleNamespace(key="max_recall", label="Max Recall", description="Limit", default="5", kind="number", is_secret=False, env_key=None),
+        ))
+        fields = sqlite_memory_module._setup_schema_fields(schema)
+
+        self.assertEqual([field["key"] for field in fields], ["db_path", "auto_extract", "max_recall"])
+        self.assertEqual(fields[1]["choices"], ["true", "false"])
+        self.assertFalse(any(field.get("secret") for field in fields))
+
     def test_database_initialization(self):
         """Should create tables, triggers, and FTS5 virtual table."""
         self.assertTrue(self.db_path.exists())

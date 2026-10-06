@@ -147,6 +147,26 @@ def _get_configured_db_path() -> Path:
     return _get_hermes_home_dir() / "memory.db"
 
 
+def _setup_schema_fields(schema) -> List[Dict[str, Any]]:
+    """Adapt the UI config schema to the field-dictionary contract used by memory setup."""
+    fields = []
+    for field in schema.fields:
+        item = {
+            "key": field.key,
+            "description": field.description or field.label,
+            "default": field.default,
+            "secret": field.is_secret,
+        }
+        if field.env_key:
+            item["env_var"] = field.env_key
+        if field.kind == "bool":
+            item["choices"] = ["true", "false"]
+        elif field.kind == "select":
+            item["choices"] = [option.value for option in field.options]
+        fields.append(item)
+    return fields
+
+
 class SQLiteMemoryProvider(MemoryProvider):
     """Local SQLite-backed persistent memory provider with FTS5 search."""
 
@@ -171,7 +191,7 @@ class SQLiteMemoryProvider(MemoryProvider):
     def get_config_schema(self):
         try:
             from .config_schema import CONFIG_SCHEMA
-            return CONFIG_SCHEMA
+            return _setup_schema_fields(CONFIG_SCHEMA)
         except Exception:
             return [
                 {"key": "db_path", "description": "Path to SQLite database", "default": str(self._db_path)},
