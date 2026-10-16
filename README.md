@@ -70,10 +70,14 @@ memory:
   memory_enabled: true
   provider: sqlite-memory
   sqlite-memory: # (Both "sqlite-memory" and "sqlite_memory" are supported)
-    db_path: "~/.hermes/memory.db"
+    # Optional: omit db_path to use the active profile's Hermes home/memory.db.
+    # Set db_path only for a custom or intentionally shared database.
+    # db_path: "/path/to/custom/memory.db"
     auto_extract: true
     max_recall: 5
 ```
+
+When `db_path` is omitted, memories are stored in `memory.db` under the active profile's Hermes home. An explicit `db_path` overrides this location; profiles configured with the same path share one database.
 
 ### 3. Restart Hermes
 
@@ -94,14 +98,19 @@ Restart Hermes Agent to activate the plugin.
 
 ## 💾 Database Inspection & Backup
 
-Memories are stored in `~/.hermes/memory.db` as standard SQLite:
+By default, memories are stored in `memory.db` under the active profile's Hermes home. On the standard Unix layout, the default profile uses `~/.hermes/memory.db`, while a named profile uses `~/.hermes/profiles/<profile>/memory.db`. If `HERMES_HOME` is configured, use that profile's configured home.
+
+Set `db_path` explicitly to use a custom location. Profiles configured with the same path will share one database.
 
 ```bash
+# Default-profile example. For a named profile, point DB_PATH at that profile's Hermes home.
+DB_PATH="$HOME/.hermes/memory.db"
+
 # Inspect the 10 most recent memories
-sqlite3 ~/.hermes/memory.db "SELECT id, category, content, created_at FROM memories ORDER BY id DESC LIMIT 10;"
+sqlite3 "$DB_PATH" "SELECT id, category, content, created_at FROM memories ORDER BY id DESC LIMIT 10;"
 
 # Create a manual backup
-cp ~/.hermes/memory.db ~/.hermes/memory_backup.db
+cp "$DB_PATH" "${DB_PATH%.db}_backup.db"
 ```
 
 <br>
@@ -181,10 +190,14 @@ memory:
   memory_enabled: true
   provider: sqlite-memory
   sqlite-memory: # (互換性のため "sqlite-memory" と "sqlite_memory" の両記法に対応)
-    db_path: "~/.hermes/memory.db"
+    # db_path は省略可能。省略時は現在のプロファイルの Hermes home 配下に保存されます。
+    # カスタム／共有 DB を使う場合のみ db_path を指定してください。
+    # db_path: "/path/to/custom/memory.db"
     auto_extract: true
     max_recall: 5
 ```
+
+`db_path` を省略すると、現在のプロファイルの Hermes home 直下に `memory.db` が作成されます。`db_path` を明示すると保存先が上書きされ、複数プロファイルに同じパスを指定した場合は同じ DB を共有します。
 
 ### 3. Hermes の再起動
 
@@ -205,12 +218,17 @@ Hermes Agent を起動・再起動すれば自動的に有効化されます。
 
 ## 💾 データベースの確認・バックアップ
 
-記憶データはデフォルトで `~/.hermes/memory.db` に SQLite 形式で保存されます。
+記憶データはデフォルトで、現在のプロファイルの Hermes home 直下にある `memory.db` に保存されます。標準的な Unix 配置では、default プロファイルは `~/.hermes/memory.db`、名前付きプロファイルは `~/.hermes/profiles/<profile>/memory.db` です。`HERMES_HOME` を設定している場合は、そのプロファイルの Hermes home を使用してください。
+
+`db_path` を明示すると、この既定の保存先を上書きします。複数プロファイルに同じパスを指定した場合は DB を共有します。
 
 ```bash
+# default プロファイルの例。名前付きプロファイルでは DB_PATH をその Hermes home に変更してください。
+DB_PATH="$HOME/.hermes/memory.db"
+
 # 記憶の一覧を確認
-sqlite3 ~/.hermes/memory.db "SELECT id, category, content, created_at FROM memories ORDER BY id DESC LIMIT 10;"
+sqlite3 "$DB_PATH" "SELECT id, category, content, created_at FROM memories ORDER BY id DESC LIMIT 10;"
 
 # バックアップの作成
-cp ~/.hermes/memory.db ~/.hermes/memory_backup.db
+cp "$DB_PATH" "${DB_PATH%.db}_backup.db"
 ```
