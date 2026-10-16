@@ -100,8 +100,11 @@ LIST_SCHEMA = {
 }
 
 
-def _get_hermes_home_dir() -> Path:
-    """Resolve active Hermes home directory respecting active profiles."""
+def _get_hermes_home_dir(hermes_home: Optional[str] = None) -> Path:
+    """Prefer the active profile home supplied by MemoryProvider.initialize()."""
+    if hermes_home and str(hermes_home).strip():
+        return Path(os.path.expanduser(str(hermes_home).strip()))
+
     if os.environ.get("HERMES_HOME", "").strip():
         return Path(os.path.expanduser(os.environ["HERMES_HOME"].strip()))
 
@@ -131,7 +134,7 @@ def _get_hermes_home_dir() -> Path:
     return Path(os.path.expanduser("~/.hermes"))
 
 
-def _get_configured_db_path() -> Path:
+def _get_configured_db_path(hermes_home: Optional[str] = None) -> Path:
     """Read custom DB path from config (supporting both sqlite_memory and sqlite-memory) or fallback to default."""
     try:
         from hermes_cli.config import load_config, cfg_get
@@ -144,7 +147,7 @@ def _get_configured_db_path() -> Path:
             return Path(os.path.expanduser(str(custom_path)))
     except Exception:
         pass
-    return _get_hermes_home_dir() / "memory.db"
+    return _get_hermes_home_dir(hermes_home) / "memory.db"
 
 
 def _setup_schema_fields(schema) -> List[Dict[str, Any]]:
@@ -179,7 +182,7 @@ class SQLiteMemoryProvider(MemoryProvider):
         self._last_recall_count = 0
         self._lock = threading.Lock()
         self._initialized = False
-        self._ensure_db()
+        # Wait for initialize() to provide the profile-scoped hermes_home before creating a DB.
 
     @property
     def name(self) -> str:
@@ -282,6 +285,7 @@ class SQLiteMemoryProvider(MemoryProvider):
         """Called on agent startup / session initialization."""
         self._session_id = session_id
         self._last_recall_count = 0
+        hermes_home = kwargs.get("hermes_home")
 
         try:
             from hermes_cli.config import load_config, cfg_get
@@ -290,7 +294,11 @@ class SQLiteMemoryProvider(MemoryProvider):
                 cfg_get(config, "memory", "sqlite_memory", "db_path", default="")
                 or cfg_get(config, "memory", "sqlite-memory", "db_path", default="")
             )
-            self._db_path = Path(os.path.expanduser(str(custom_path))) if custom_path else _get_configured_db_path()
+            self._db_path = (
+                Path(os.path.expanduser(str(custom_path)))
+                if custom_path
+                else _get_configured_db_path(hermes_home)
+            )
             auto_ext = (
                 cfg_get(config, "memory", "sqlite_memory", "auto_extract", default=None)
                 if cfg_get(config, "memory", "sqlite_memory", "auto_extract", default=None) is not None
@@ -304,7 +312,7 @@ class SQLiteMemoryProvider(MemoryProvider):
             )
             self._max_recall = int(max_rec)
         except Exception:
-            self._db_path = _get_configured_db_path()
+            self._db_path = _get_configured_db_path(hermes_home)
 
         self._initialized = False
         self._ensure_db()

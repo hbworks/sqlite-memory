@@ -25,6 +25,39 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
         self.provider._initialized = False
         self.provider._ensure_db()
 
+    def test_initialize_uses_runtime_profile_home_for_database(self):
+        import sqlite3
+
+        env_home = Path(self.tmpdir) / "environment-profile"
+        runtime_home = Path(self.tmpdir) / "runtime-profile"
+        env_home.mkdir()
+        runtime_home.mkdir()
+        previous_home = os.environ.get("HERMES_HOME")
+        previous_profile = os.environ.get("HERMES_PROFILE")
+
+        try:
+            os.environ["HERMES_HOME"] = str(env_home)
+            os.environ.pop("HERMES_PROFILE", None)
+            provider = SQLiteMemoryProvider()
+            provider.initialize(session_id="path-test", hermes_home=str(runtime_home))
+
+            self.assertEqual(provider._db_path, runtime_home / "memory.db")
+            self.assertFalse((env_home / "memory.db").exists())
+
+            provider.add_memory("profile routing sentinel", category="test")
+            with sqlite3.connect(str(runtime_home / "memory.db")) as conn:
+                stored = conn.execute("SELECT content FROM memories").fetchone()
+            self.assertEqual(stored, ("profile routing sentinel",))
+        finally:
+            if previous_home is None:
+                os.environ.pop("HERMES_HOME", None)
+            else:
+                os.environ["HERMES_HOME"] = previous_home
+            if previous_profile is None:
+                os.environ.pop("HERMES_PROFILE", None)
+            else:
+                os.environ["HERMES_PROFILE"] = previous_profile
+
     def tearDown(self):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
