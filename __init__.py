@@ -140,8 +140,8 @@ def _get_configured_db_path(hermes_home: Optional[str] = None) -> Path:
         from hermes_cli.config import load_config, cfg_get
         config = load_config()
         custom_path = (
-            cfg_get(config, "memory", "sqlite_memory", "db_path", default="")
-            or cfg_get(config, "memory", "sqlite-memory", "db_path", default="")
+            cfg_get(config, "memory", "sqlite-memory", "db_path", default="")
+            or cfg_get(config, "memory", "sqlite_memory", "db_path", default="")
         )
         if custom_path:
             return Path(os.path.expanduser(str(custom_path)))
@@ -291,8 +291,8 @@ class SQLiteMemoryProvider(MemoryProvider):
             from hermes_cli.config import load_config, cfg_get
             config = load_config()
             custom_path = (
-                cfg_get(config, "memory", "sqlite_memory", "db_path", default="")
-                or cfg_get(config, "memory", "sqlite-memory", "db_path", default="")
+                cfg_get(config, "memory", "sqlite-memory", "db_path", default="")
+                or cfg_get(config, "memory", "sqlite_memory", "db_path", default="")
             )
             self._db_path = (
                 Path(os.path.expanduser(str(custom_path)))
@@ -300,15 +300,15 @@ class SQLiteMemoryProvider(MemoryProvider):
                 else _get_configured_db_path(hermes_home)
             )
             auto_ext = (
-                cfg_get(config, "memory", "sqlite_memory", "auto_extract", default=None)
-                if cfg_get(config, "memory", "sqlite_memory", "auto_extract", default=None) is not None
-                else cfg_get(config, "memory", "sqlite-memory", "auto_extract", default="true")
+                cfg_get(config, "memory", "sqlite-memory", "auto_extract", default=None)
+                if cfg_get(config, "memory", "sqlite-memory", "auto_extract", default=None) is not None
+                else cfg_get(config, "memory", "sqlite_memory", "auto_extract", default="true")
             )
             self._auto_extract = str(auto_ext).lower() in ("true", "1", "yes")
             max_rec = (
-                cfg_get(config, "memory", "sqlite_memory", "max_recall", default=None)
-                if cfg_get(config, "memory", "sqlite_memory", "max_recall", default=None) is not None
-                else cfg_get(config, "memory", "sqlite-memory", "max_recall", default=5)
+                cfg_get(config, "memory", "sqlite-memory", "max_recall", default=None)
+                if cfg_get(config, "memory", "sqlite-memory", "max_recall", default=None) is not None
+                else cfg_get(config, "memory", "sqlite_memory", "max_recall", default=5)
             )
             self._max_recall = int(max_rec)
         except Exception:
