@@ -186,7 +186,7 @@ class SQLiteMemoryProvider(MemoryProvider):
 
     @property
     def name(self) -> str:
-        return "sqlite_memory"
+        return "sqlite-memory"
 
     def is_available(self) -> bool:
         return True
@@ -502,6 +502,6 @@ def register(ctx) -> None:
                 ctx.register_tool(
                     name=name,
                     toolset="sqlite_memory",
-                    schema=schema,
+                    schema=schema.get("function", schema),
                     handler=lambda args, _name=name, **kwargs: provider.handle_tool_call(_name, args, **kwargs),
                 )

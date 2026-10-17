@@ -76,6 +76,33 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
         self.assertEqual(fields[1]["choices"], ["true", "false"])
         self.assertFalse(any(field.get("secret") for field in fields))
 
+    def test_provider_name_matches_hyphenated_plugin_id(self):
+        """Provider identity matches the directory id selected by memory.provider."""
+        self.assertEqual(self.provider.name, "sqlite-memory")
+
+    def test_register_passes_inner_schemas_to_tool_registry(self):
+        """PluginContext receives bare function schemas, not OpenAI-wrapped schemas."""
+        class CaptureContext:
+            def __init__(self):
+                self.tools = []
+
+            def register_memory_provider(self, provider):
+                self.provider = provider
+
+            def register_tool(self, **registration):
+                self.tools.append(registration)
+
+        ctx = CaptureContext()
+        sqlite_memory_module.register(ctx)
+
+        self.assertEqual(len(ctx.tools), 4)
+        for registration in ctx.tools:
+            schema = registration["schema"]
+            self.assertEqual(schema.get("name"), registration["name"])
+            self.assertIsInstance(schema.get("parameters"), dict)
+            self.assertNotIn("function", schema)
+            self.assertNotIn("type", schema)
+
     def test_database_initialization(self):
         """Should create tables, triggers, and FTS5 virtual table."""
         self.assertTrue(self.db_path.exists())
@@ -341,6 +368,48 @@ memory:
             resolved = _read_config_db_path(cfg)
 
         self.assertEqual(resolved, Path("/tmp/custom_hyphen.db"))
+
+    def test_config_db_path_prefers_hyphen_when_both_notations_are_present(self):
+        """The canonical hyphenated setting must win when both keys define a path."""
+        import sys
+        import types
+        from unittest.mock import patch
+        from dashboard.plugin_api import _read_config_db_path
+
+        cfg = Path(self.tmpdir) / "conflicting_paths.yaml"
+        cfg.write_text("fixture", encoding="utf-8")
+        yaml_stub = types.ModuleType("yaml")
+        yaml_stub.safe_load = lambda _: {
+            "memory": {
+                "sqlite_memory": {"db_path": "/tmp/underscore.db"},
+                "sqlite-memory": {"db_path": "/tmp/hyphen.db"},
+            }
+        }
+
+        with patch.dict(sys.modules, {"yaml": yaml_stub}):
+            resolved = _read_config_db_path(cfg)
+
+        self.assertEqual(resolved, Path("/tmp/hyphen.db"))
+
+    def test_config_db_path_prefers_hyphen_without_yaml_dependency(self):
+        """The zero-dependency parser must apply the same key precedence as YAML parsing."""
+        import sys
+        from unittest.mock import patch
+        from dashboard.plugin_api import _read_config_db_path
+
+        cfg = Path(self.tmpdir) / "conflicting_paths_without_yaml.yaml"
+        cfg.write_text("""
+memory:
+  sqlite_memory:
+    db_path: "/tmp/underscore.db"
+  sqlite-memory:
+    db_path: "/tmp/hyphen.db"
+""", encoding="utf-8")
+
+        with patch.dict(sys.modules, {"yaml": None}):
+            resolved = _read_config_db_path(cfg)
+
+        self.assertEqual(resolved, Path("/tmp/hyphen.db"))
 
     def test_hermes_root_resolution_custom_home(self):
         """Should respect HERMES_HOME even when it does not contain 'profiles'."""

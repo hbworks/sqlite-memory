@@ -124,7 +124,7 @@ def _db_schema_cache_signature(conn: sqlite3.Connection, db_path: Path) -> Optio
 
 
 def _read_config_db_path(config_file: Path) -> Optional[Path]:
-    """Read sqlite_memory or sqlite-memory db_path from a config.yaml file."""
+    """Prefer sqlite-memory db_path, falling back to the legacy sqlite_memory key."""
     if not config_file.is_file():
         return None
     try:
@@ -134,7 +134,7 @@ def _read_config_db_path(config_file: Path) -> Optional[Path]:
                 data = yaml.safe_load(f) or {}
             memory_cfg = data.get("memory")
             if isinstance(memory_cfg, dict):
-                for config_key in ("sqlite_memory", "sqlite-memory"):
+                for config_key in ("sqlite-memory", "sqlite_memory"):
                     cfg_obj = memory_cfg.get(config_key)
                     if not isinstance(cfg_obj, dict):
                         continue
@@ -143,7 +143,10 @@ def _read_config_db_path(config_file: Path) -> Optional[Path]:
                         return Path(os.path.expanduser(str(p)))
         except ImportError:
             content = config_file.read_text(encoding="utf-8")
-            match = re.search(r"(?:sqlite_memory|sqlite-memory)[\s\S]*?db_path:\s*([^\r\n#]+)", content)
+            db_path_pattern = r"db_path:\s*([^\r\n#]+)"
+            match = re.search(r"sqlite-memory[\s\S]*?" + db_path_pattern, content)
+            if match is None:
+                match = re.search(r"sqlite_memory[\s\S]*?" + db_path_pattern, content)
             if match:
                 val = match.group(1).strip().strip('"\'')
                 if val:
