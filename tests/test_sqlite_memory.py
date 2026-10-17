@@ -267,6 +267,24 @@ class TestDashboardSecurityAndIntegrity(unittest.TestCase):
         conn.close()
         conn2.close()
 
+    def test_schema_cache_reinitializes_database_recreated_at_same_path(self):
+        """A replaced DB file at a cached path must receive the schema again."""
+        import sqlite3
+        from dashboard.plugin_api import _ensure_db_schema
+
+        db_file = Path(self.tmpdir) / "recreated.db"
+        conn = sqlite3.connect(str(db_file))
+        _ensure_db_schema(conn, db_file)
+        conn.close()
+
+        db_file.unlink()
+        conn = sqlite3.connect(str(db_file))
+        _ensure_db_schema(conn, db_file)
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        conn.close()
+
+        self.assertIn("memories", tables)
+
     def test_config_db_path_resolution(self):
         """Should resolve db_path from both sqlite_memory and sqlite-memory notations."""
         from dashboard.plugin_api import _read_config_db_path
@@ -302,6 +320,28 @@ memory:
         resolved3 = _read_config_db_path(cfg3)
         self.assertIsNone(resolved3)
 
+    def test_config_db_path_falls_back_between_notations(self):
+        """A section without db_path must not hide db_path under the other supported name."""
+        import sys
+        import types
+        from unittest.mock import patch
+        from dashboard.plugin_api import _read_config_db_path
+
+        cfg = Path(self.tmpdir) / "both_notations.yaml"
+        cfg.write_text("fixture", encoding="utf-8")
+        yaml_stub = types.ModuleType("yaml")
+        yaml_stub.safe_load = lambda _: {
+            "memory": {
+                "sqlite_memory": {"auto_extract": True},
+                "sqlite-memory": {"db_path": "/tmp/custom_hyphen.db"},
+            }
+        }
+
+        with patch.dict(sys.modules, {"yaml": yaml_stub}):
+            resolved = _read_config_db_path(cfg)
+
+        self.assertEqual(resolved, Path("/tmp/custom_hyphen.db"))
+
     def test_hermes_root_resolution_custom_home(self):
         """Should respect HERMES_HOME even when it does not contain 'profiles'."""
         from dashboard.plugin_api import _get_hermes_root
@@ -317,6 +357,126 @@ memory:
                 os.environ.pop("HERMES_HOME", None)
             else:
                 os.environ["HERMES_HOME"] = old_home
+
+    def test_auto_detected_environment_profile_rejects_path_traversal(self):
+        """An environment-selected profile must not escape the Hermes root."""
+        from dashboard.plugin_api import _get_db_path, HTTPException
+
+        old_values = {key: os.environ.get(key) for key in ("HOME", "HERMES_HOME", "HERMES_PROFILE")}
+        try:
+            home = Path(self.tmpdir) / "home"
+            root = home / ".hermes"
+            (root / "profiles").mkdir(parents=True)
+            (home / "outside").mkdir()
+            os.environ["HOME"] = str(home)
+            os.environ.pop("HERMES_HOME", None)
+            os.environ["HERMES_PROFILE"] = "../../outside"
+
+            with self.assertRaises(HTTPException) as ctx:
+                _get_db_path()
+            self.assertEqual(ctx.exception.status_code, 400)
+        finally:
+            for key, value in old_values.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+    def test_active_profile_file_rejects_paths_outside_hermes_root(self):
+        """A sticky active profile must not escape the Hermes root by traversal or symlink."""
+        from dashboard.plugin_api import _get_db_path, HTTPException
+
+        old_values = {key: os.environ.get(key) for key in ("HOME", "HERMES_HOME", "HERMES_PROFILE")}
+        try:
+            home = Path(self.tmpdir) / "home"
+            root = home / ".hermes"
+            profiles = root / "profiles"
+            profiles.mkdir(parents=True)
+            outside = home / "outside"
+            outside.mkdir()
+            (profiles / "outside_link").symlink_to(outside, target_is_directory=True)
+            os.environ["HOME"] = str(home)
+            os.environ.pop("HERMES_HOME", None)
+            os.environ.pop("HERMES_PROFILE", None)
+
+            for profile_name in ("../../outside", "outside_link"):
+                with self.subTest(profile=profile_name):
+                    (root / "active_profile").write_text(profile_name, encoding="utf-8")
+                    with self.assertRaises(HTTPException) as ctx:
+                        _get_db_path()
+                    self.assertEqual(ctx.exception.status_code, 400)
+        finally:
+            for key, value in old_values.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+    def test_auto_detected_database_symlink_outside_root_is_rejected(self):
+        """An auto-detected profile database symlink must stay inside the Hermes root."""
+        from dashboard.plugin_api import _get_db_path, HTTPException
+
+        old_values = {key: os.environ.get(key) for key in ("HOME", "HERMES_HOME", "HERMES_PROFILE")}
+        try:
+            home = Path(self.tmpdir) / "home"
+            root = home / ".hermes"
+            profiles = root / "profiles"
+            profile_dir = profiles / "linked"
+            profile_dir.mkdir(parents=True)
+            outside_db = home / "outside.db"
+            outside_db.touch()
+            (profile_dir / "memory.db").symlink_to(outside_db)
+            os.environ["HOME"] = str(home)
+            os.environ.pop("HERMES_HOME", None)
+
+            for source in ("environment", "active_profile"):
+                with self.subTest(source=source):
+                    if source == "environment":
+                        os.environ["HERMES_PROFILE"] = "linked"
+                    else:
+                        os.environ.pop("HERMES_PROFILE", None)
+                        (root / "active_profile").write_text("linked", encoding="utf-8")
+                    with self.assertRaises(HTTPException) as ctx:
+                        _get_db_path()
+                    self.assertEqual(ctx.exception.status_code, 400)
+        finally:
+            for key, value in old_values.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+    def test_auto_detected_root_profile_aliases_use_root_database(self):
+        """Auto-detected root aliases must match explicit profile resolution."""
+        from dashboard.plugin_api import _get_db_path
+
+        old_values = {key: os.environ.get(key) for key in ("HOME", "HERMES_HOME", "HERMES_PROFILE")}
+        try:
+            home = Path(self.tmpdir) / "home"
+            root = home / ".hermes"
+            profiles = root / "profiles"
+            profiles.mkdir(parents=True)
+            for name in ("default", "main", "root"):
+                (profiles / name).mkdir()
+            os.environ["HOME"] = str(home)
+            os.environ.pop("HERMES_HOME", None)
+            active_file = root / "active_profile"
+
+            for profile_name in ("default", "main", "root", "~/.hermes"):
+                with self.subTest(source="environment", profile=profile_name):
+                    os.environ["HERMES_PROFILE"] = profile_name
+                    self.assertEqual(_get_db_path(), root / "memory.db")
+
+                with self.subTest(source="active_profile", profile=profile_name):
+                    os.environ.pop("HERMES_PROFILE", None)
+                    active_file.write_text(profile_name, encoding="utf-8")
+                    self.assertEqual(_get_db_path(), root / "memory.db")
+        finally:
+            for key, value in old_values.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
     def test_validate_profile_non_string_safety(self):
         """Should safely handle non-string or Query default objects without AttributeError."""
@@ -334,6 +494,18 @@ memory:
         async def run():
             with self.assertRaises(HTTPException) as ctx:
                 await create_memory(MemoryCreateRequest(content="hello"), profile="../evil")
+            self.assertEqual(ctx.exception.status_code, 400)
+
+        asyncio.run(run())
+
+    def test_list_memories_invalid_profile_returns_400(self):
+        """Should not turn an invalid profile error into an empty successful response."""
+        import asyncio
+        from dashboard.plugin_api import list_memories, HTTPException
+
+        async def run():
+            with self.assertRaises(HTTPException) as ctx:
+                await list_memories(profile="../evil")
             self.assertEqual(ctx.exception.status_code, 400)
 
         asyncio.run(run())

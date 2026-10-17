@@ -11,7 +11,7 @@ import re
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Generator, List, Optional, Set
+from typing import Any, Dict, Generator, List, Optional
 
 try:
     from fastapi import APIRouter, HTTPException, Query, status as http_status
@@ -49,9 +49,10 @@ router = APIRouter()
 
 # 厳格なプロファイル名バリデーション用（英数字、ハイフン、アンダースコアのみ許可）
 _PROFILE_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
+_ROOT_PROFILE_ALIASES = frozenset(("default", "main", "root", "~/.hermes"))
 
 # 初期化済み DB パスのキャッシュ（リクエスト毎の重複 DDL 実行を抑制）
-_INITIALIZED_DBS: Set[str] = set()
+_INITIALIZED_DBS: Dict[str, tuple[int, int, int]] = {}
 
 
 def _get_hermes_root() -> Path:
@@ -73,7 +74,7 @@ def _validate_profile(profile: Optional[str]) -> str:
     prof = profile.strip()
     if not prof:
         return ""
-    if prof in ("default", "main", "root", "~/.hermes"):
+    if prof in _ROOT_PROFILE_ALIASES:
         return prof
     if not _PROFILE_RE.match(prof):
         raise HTTPException(
@@ -81,6 +82,45 @@ def _validate_profile(profile: Optional[str]) -> str:
             detail=f"Invalid profile name '{prof}': only alphanumeric characters, underscores, and hyphens are allowed."
         )
     return prof
+
+
+def _validated_profile_dir(root: Path, profile: str) -> Path:
+    """Return a profile directory only when its resolved path stays under the Hermes root."""
+    prof = _validate_profile(profile)
+    prof_dir = root / "profiles" / prof
+    try:
+        prof_dir.resolve().relative_to(root.resolve())
+    except (ValueError, OSError, RuntimeError):
+        raise HTTPException(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            detail="Path traversal detected: profile directory is outside Hermes root."
+        )
+    return prof_dir
+
+
+def _validated_profile_db_path(root: Path, prof_dir: Path) -> Path:
+    """Return the default DB path only when its resolved target stays under the Hermes root."""
+    target_path = prof_dir / "memory.db"
+    try:
+        target_path.resolve().relative_to(root.resolve())
+    except (ValueError, OSError, RuntimeError):
+        raise HTTPException(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            detail="Path traversal detected: target database is outside Hermes root."
+        )
+    return target_path
+
+
+def _db_schema_cache_signature(conn: sqlite3.Connection, db_path: Path) -> Optional[tuple[int, int, int]]:
+    """Identify a database file and schema version for safe initialization-cache reuse."""
+    try:
+        db_stat = db_path.stat()
+        schema_row = conn.execute("PRAGMA schema_version").fetchone()
+    except (OSError, sqlite3.Error):
+        return None
+    if schema_row is None:
+        return None
+    return db_stat.st_dev, db_stat.st_ino, int(schema_row[0])
 
 
 def _read_config_db_path(config_file: Path) -> Optional[Path]:
@@ -94,8 +134,10 @@ def _read_config_db_path(config_file: Path) -> Optional[Path]:
                 data = yaml.safe_load(f) or {}
             memory_cfg = data.get("memory")
             if isinstance(memory_cfg, dict):
-                cfg_obj = memory_cfg.get("sqlite_memory") or memory_cfg.get("sqlite-memory")
-                if isinstance(cfg_obj, dict):
+                for config_key in ("sqlite_memory", "sqlite-memory"):
+                    cfg_obj = memory_cfg.get(config_key)
+                    if not isinstance(cfg_obj, dict):
+                        continue
                     p = cfg_obj.get("db_path")
                     if p:
                         return Path(os.path.expanduser(str(p)))
@@ -127,28 +169,18 @@ def _get_db_path(profile: Optional[str] = None) -> Path:
     root = _get_hermes_root()
 
     # 1. default / main / root / ~/.hermes が指定された場合
-    if prof in ("default", "main", "root", "~/.hermes"):
+    if prof in _ROOT_PROFILE_ALIASES:
         cfg_path = _read_config_db_path(root / "config.yaml")
         return cfg_path if cfg_path else root / "memory.db"
 
     # 2. 特定プロファイルが明示指定された場合
     if prof:
-        prof_dir = root / "profiles" / prof
+        prof_dir = _validated_profile_dir(root, prof)
         cfg_path = _read_config_db_path(prof_dir / "config.yaml") or _read_config_db_path(root / "config.yaml")
         if cfg_path:
             return cfg_path
 
-        target_path = prof_dir / "memory.db"
-        # パストラバーサル境界チェック
-        resolved = target_path.resolve()
-        try:
-            resolved.relative_to(root.resolve())
-        except ValueError:
-            raise HTTPException(
-                status_code=http_status.HTTP_400_BAD_REQUEST,
-                detail="Path traversal detected: target database is outside Hermes root."
-            )
-        return target_path
+        return _validated_profile_db_path(root, prof_dir)
 
     # 3. 未指定の場合（HERMES_HOME、HERMES_PROFILE、active_profile、または root）
     if "HERMES_HOME" in os.environ and os.environ["HERMES_HOME"].strip():
@@ -159,22 +191,30 @@ def _get_db_path(profile: Optional[str] = None) -> Path:
     # アクティブプロファイルの自動検出フォールバック（Agent本体側の動作と整合）
     prof_env = os.environ.get("HERMES_PROFILE", "").strip()
     if prof_env:
-        prof_dir = root / "profiles" / prof_env
+        prof_env = _validate_profile(prof_env)
+        if prof_env in _ROOT_PROFILE_ALIASES:
+            cfg_path = _read_config_db_path(root / "config.yaml")
+            return cfg_path if cfg_path else root / "memory.db"
+        prof_dir = _validated_profile_dir(root, prof_env)
         if prof_dir.is_dir():
             cfg_path = _read_config_db_path(prof_dir / "config.yaml") or _read_config_db_path(root / "config.yaml")
-            return cfg_path if cfg_path else prof_dir / "memory.db"
+            return cfg_path if cfg_path else _validated_profile_db_path(root, prof_dir)
 
+    active_name = ""
     try:
         active_prof_file = root / "active_profile"
         if active_prof_file.is_file():
             active_name = active_prof_file.read_text(encoding="utf-8").strip()
-            if active_name and active_name != "default":
-                prof_dir = root / "profiles" / active_name
-                if prof_dir.is_dir():
-                    cfg_path = _read_config_db_path(prof_dir / "config.yaml") or _read_config_db_path(root / "config.yaml")
-                    return cfg_path if cfg_path else prof_dir / "memory.db"
-    except Exception:
+    except (OSError, UnicodeError):
         pass
+
+    if active_name:
+        active_name = _validate_profile(active_name)
+        if active_name not in _ROOT_PROFILE_ALIASES:
+            prof_dir = _validated_profile_dir(root, active_name)
+            if prof_dir.is_dir():
+                cfg_path = _read_config_db_path(prof_dir / "config.yaml") or _read_config_db_path(root / "config.yaml")
+                return cfg_path if cfg_path else _validated_profile_db_path(root, prof_dir)
 
     cfg_path = _read_config_db_path(root / "config.yaml")
     return cfg_path if cfg_path else root / "memory.db"
@@ -183,9 +223,11 @@ def _get_db_path(profile: Optional[str] = None) -> Path:
 def _ensure_db_schema(conn: sqlite3.Connection, db_path: Optional[Path] = None) -> None:
     """Ensure memories tables exist, register FTS triggers, and rebuild FTS if out of sync."""
     path_key = str(db_path.resolve()) if db_path else None
-    if path_key and path_key in _INITIALIZED_DBS:
+    cache_signature = _db_schema_cache_signature(conn, Path(path_key)) if path_key else None
+    if path_key and cache_signature is not None and _INITIALIZED_DBS.get(path_key) == cache_signature:
         return
 
+    fts_check_completed = False
     with conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS memories (
@@ -233,11 +275,14 @@ def _ensure_db_schema(conn: sqlite3.Connection, db_path: Optional[Path] = None) 
             doc_count = doc_row[0] if doc_row else 0
             if mem_count != doc_count:
                 conn.execute("INSERT INTO memories_fts(memories_fts) VALUES('rebuild');")
+            fts_check_completed = True
         except Exception as e:
             logger.debug("Notice during FTS integrity check: %s", e)
 
-    if path_key:
-        _INITIALIZED_DBS.add(path_key)
+    if path_key and fts_check_completed:
+        cache_signature = _db_schema_cache_signature(conn, Path(path_key))
+        if cache_signature is not None:
+            _INITIALIZED_DBS[path_key] = cache_signature
 
 
 @contextmanager
@@ -338,6 +383,8 @@ async def list_memories(
             total = count_row["cnt"] if count_row else 0
 
             return {"items": items, "total": total, "limit": limit, "offset": offset}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Error listing memories: %s", e)
         return {"items": [], "total": 0, "limit": limit, "offset": offset}
