@@ -293,6 +293,72 @@ memory:
         self.assertIsNotNone(resolved2)
         self.assertTrue(str(resolved2).endswith("custom_hyphen.db"))
 
+        # Case 3: sqlite_memory section is null / empty
+        cfg3 = Path(self.tmpdir) / "config3.yaml"
+        cfg3.write_text("""
+memory:
+  sqlite_memory:
+""", encoding="utf-8")
+        resolved3 = _read_config_db_path(cfg3)
+        self.assertIsNone(resolved3)
+
+    def test_hermes_root_resolution_custom_home(self):
+        """Should respect HERMES_HOME even when it does not contain 'profiles'."""
+        from dashboard.plugin_api import _get_hermes_root
+
+        old_home = os.environ.get("HERMES_HOME")
+        try:
+            custom_dir = Path(self.tmpdir) / "isolated_hermes"
+            os.environ["HERMES_HOME"] = str(custom_dir)
+            root = _get_hermes_root()
+            self.assertEqual(root, custom_dir)
+        finally:
+            if old_home is None:
+                os.environ.pop("HERMES_HOME", None)
+            else:
+                os.environ["HERMES_HOME"] = old_home
+
+    def test_validate_profile_non_string_safety(self):
+        """Should safely handle non-string or Query default objects without AttributeError."""
+        from dashboard.plugin_api import _validate_profile, Query
+
+        self.assertEqual(_validate_profile(Query(None)), "")
+        self.assertEqual(_validate_profile(None), "")
+        self.assertEqual(_validate_profile(123), "")  # type: ignore
+
+    def test_create_memory_invalid_profile_returns_400(self):
+        """Should raise HTTPException with 400, not 500, when invalid profile is passed to create_memory."""
+        import asyncio
+        from dashboard.plugin_api import create_memory, MemoryCreateRequest, HTTPException
+
+        async def run():
+            with self.assertRaises(HTTPException) as ctx:
+                await create_memory(MemoryCreateRequest(content="hello"), profile="../evil")
+            self.assertEqual(ctx.exception.status_code, 400)
+
+        asyncio.run(run())
+
+    def test_update_memory_empty_content_returns_400(self):
+        """Should reject empty or whitespace-only content with 400 on update."""
+        import asyncio
+        from dashboard.plugin_api import create_memory, update_memory, MemoryCreateRequest, MemoryUpdateRequest, HTTPException
+
+        async def run():
+            old_home = os.environ.get("HERMES_HOME")
+            try:
+                os.environ["HERMES_HOME"] = str(self.tmpdir)
+                m = await create_memory(MemoryCreateRequest(content="initial content"), profile="default")
+                with self.assertRaises(HTTPException) as ctx:
+                    await update_memory(m["id"], MemoryUpdateRequest(content="   "), profile="default")
+                self.assertEqual(ctx.exception.status_code, 400)
+            finally:
+                if old_home is None:
+                    os.environ.pop("HERMES_HOME", None)
+                else:
+                    os.environ["HERMES_HOME"] = old_home
+
+        asyncio.run(run())
+
 
 if __name__ == "__main__":
     unittest.main()

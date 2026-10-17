@@ -1,6 +1,6 @@
 """SQLite Memory Plugin — Backend API Routes for Hermes Desktop & Dashboard.
 
-Mounted at /api/plugins/sqlite_memory/
+Mounted at /api/plugins/sqlite-memory/ (and /api/plugins/sqlite_memory/ for backwards compatibility)
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import re
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Generator, List, Optional
+from typing import Any, Dict, Generator, List, Optional, Set
 
 try:
     from fastapi import APIRouter, HTTPException, Query, status as http_status
@@ -37,7 +37,9 @@ except ImportError:
         return default
 
     class BaseModel:  # type: ignore
-        pass
+        def __init__(self, **data: Any):
+            for k, v in data.items():
+                setattr(self, k, v)
 
     def Field(default=..., **kwargs):  # type: ignore
         return default
@@ -48,6 +50,9 @@ router = APIRouter()
 # 厳格なプロファイル名バリデーション用（英数字、ハイフン、アンダースコアのみ許可）
 _PROFILE_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
+# 初期化済み DB パスのキャッシュ（リクエスト毎の重複 DDL 実行を抑制）
+_INITIALIZED_DBS: Set[str] = set()
+
 
 def _get_hermes_root() -> Path:
     """Get the true ~/.hermes root directory, even when HERMES_HOME points to a profile."""
@@ -57,12 +62,13 @@ def _get_hermes_root() -> Path:
             parts = list(p.parts)
             idx = parts.index("profiles")
             return Path(*parts[:idx])
+        return p
     return Path(os.path.expanduser("~/.hermes"))
 
 
 def _validate_profile(profile: Optional[str]) -> str:
     """Validate and sanitize profile name to prevent path traversal."""
-    if not profile:
+    if not profile or not isinstance(profile, str):
         return ""
     prof = profile.strip()
     if not prof:
@@ -86,14 +92,13 @@ def _read_config_db_path(config_file: Path) -> Optional[Path]:
             import yaml
             with open(config_file, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
-            memory_cfg = data.get("memory", {})
+            memory_cfg = data.get("memory")
             if isinstance(memory_cfg, dict):
-                p = (
-                    memory_cfg.get("sqlite_memory", {}).get("db_path")
-                    or memory_cfg.get("sqlite-memory", {}).get("db_path")
-                )
-                if p:
-                    return Path(os.path.expanduser(str(p)))
+                cfg_obj = memory_cfg.get("sqlite_memory") or memory_cfg.get("sqlite-memory")
+                if isinstance(cfg_obj, dict):
+                    p = cfg_obj.get("db_path")
+                    if p:
+                        return Path(os.path.expanduser(str(p)))
         except ImportError:
             content = config_file.read_text(encoding="utf-8")
             match = re.search(r"(?:sqlite_memory|sqlite-memory)[\s\S]*?db_path:\s*([^\r\n#]+)", content)
@@ -111,7 +116,8 @@ def _get_available_profiles() -> List[str]:
     profiles = ["default"]
     p_dir = _get_hermes_root() / "profiles"
     if p_dir.is_dir():
-        profiles.extend([p.name for p in sorted(p_dir.iterdir()) if p.is_dir() and not p.name.startswith(".")])
+        found = [p.name for p in sorted(p_dir.iterdir()) if p.is_dir() and not p.name.startswith(".") and p.name != "default"]
+        profiles.extend(found)
     return profiles
 
 
@@ -144,18 +150,42 @@ def _get_db_path(profile: Optional[str] = None) -> Path:
             )
         return target_path
 
-    # 3. 未指定の場合（現在の HERMES_HOME または root）
+    # 3. 未指定の場合（HERMES_HOME、HERMES_PROFILE、active_profile、または root）
     if "HERMES_HOME" in os.environ and os.environ["HERMES_HOME"].strip():
         h_home = Path(os.path.expanduser(os.environ["HERMES_HOME"].strip()))
         cfg_path = _read_config_db_path(h_home / "config.yaml") or _read_config_db_path(root / "config.yaml")
         return cfg_path if cfg_path else h_home / "memory.db"
 
+    # アクティブプロファイルの自動検出フォールバック（Agent本体側の動作と整合）
+    prof_env = os.environ.get("HERMES_PROFILE", "").strip()
+    if prof_env:
+        prof_dir = root / "profiles" / prof_env
+        if prof_dir.is_dir():
+            cfg_path = _read_config_db_path(prof_dir / "config.yaml") or _read_config_db_path(root / "config.yaml")
+            return cfg_path if cfg_path else prof_dir / "memory.db"
+
+    try:
+        active_prof_file = root / "active_profile"
+        if active_prof_file.is_file():
+            active_name = active_prof_file.read_text(encoding="utf-8").strip()
+            if active_name and active_name != "default":
+                prof_dir = root / "profiles" / active_name
+                if prof_dir.is_dir():
+                    cfg_path = _read_config_db_path(prof_dir / "config.yaml") or _read_config_db_path(root / "config.yaml")
+                    return cfg_path if cfg_path else prof_dir / "memory.db"
+    except Exception:
+        pass
+
     cfg_path = _read_config_db_path(root / "config.yaml")
     return cfg_path if cfg_path else root / "memory.db"
 
 
-def _ensure_db_schema(conn: sqlite3.Connection) -> None:
+def _ensure_db_schema(conn: sqlite3.Connection, db_path: Optional[Path] = None) -> None:
     """Ensure memories tables exist, register FTS triggers, and rebuild FTS if out of sync."""
+    path_key = str(db_path.resolve()) if db_path else None
+    if path_key and path_key in _INITIALIZED_DBS:
+        return
+
     with conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS memories (
@@ -206,6 +236,9 @@ def _ensure_db_schema(conn: sqlite3.Connection) -> None:
         except Exception as e:
             logger.debug("Notice during FTS integrity check: %s", e)
 
+    if path_key:
+        _INITIALIZED_DBS.add(path_key)
+
 
 @contextmanager
 def _db_conn(profile: Optional[str] = None) -> Generator[sqlite3.Connection, None, None]:
@@ -216,7 +249,7 @@ def _db_conn(profile: Optional[str] = None) -> Generator[sqlite3.Connection, Non
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode = WAL;")
     conn.execute("PRAGMA synchronous = NORMAL;")
-    _ensure_db_schema(conn)
+    _ensure_db_schema(conn, db_path)
     try:
         yield conn
     finally:
@@ -316,7 +349,7 @@ async def create_memory(
     profile: Optional[str] = Query(None, description="Profile name"),
 ) -> Dict[str, Any]:
     """Create a new memory manually."""
-    if not req.content.strip():
+    if not req.content or not req.content.strip():
         raise HTTPException(status_code=400, detail="Content cannot be empty")
 
     try:
@@ -328,6 +361,8 @@ async def create_memory(
                 )
                 row = conn.execute("SELECT * FROM memories WHERE id = ?", (cursor.lastrowid,)).fetchone()
                 return dict(row)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Error creating memory: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -340,6 +375,9 @@ async def update_memory(
     profile: Optional[str] = Query(None, description="Profile name"),
 ) -> Dict[str, Any]:
     """Update an existing memory."""
+    if req.content is not None and not req.content.strip():
+        raise HTTPException(status_code=400, detail="Content cannot be empty")
+
     try:
         with _db_conn(profile) as conn:
             with conn:
@@ -348,7 +386,7 @@ async def update_memory(
                     raise HTTPException(status_code=404, detail="Memory not found")
 
                 content = req.content.strip() if req.content is not None else existing["content"]
-                category = req.category.strip() if req.category is not None else existing["category"]
+                category = (req.category.strip() or existing["category"]) if req.category is not None else existing["category"]
 
                 conn.execute(
                     "UPDATE memories SET content = ?, category = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
