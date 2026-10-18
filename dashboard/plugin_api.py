@@ -332,16 +332,14 @@ async def get_stats(profile: Optional[str] = Query(None, description="Profile na
                 "profile": profile or "default",
                 "available_profiles": _get_available_profiles(),
             }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Error fetching memory stats: %s", e)
-        return {
-            "total_memories": 0,
-            "categories": {},
-            "db_path": str(db_path),
-            "db_size_bytes": 0,
-            "profile": profile or "default",
-            "available_profiles": _get_available_profiles(),
-        }
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to fetch memory statistics",
+        ) from e
 
 
 @router.get("/memories")

@@ -810,6 +810,23 @@ memory:
         for key in ("db_path", "profile", "available_profiles"):
             self.assertIn(key, populated)
 
+    def test_stats_endpoint_returns_500_when_database_read_fails(self):
+        import asyncio
+        import sqlite3
+        from unittest.mock import patch
+        from dashboard.plugin_api import HTTPException, get_stats
+
+        db_path = Path(self.tmpdir) / "unreadable.db"
+        with patch("dashboard.plugin_api._get_db_path", return_value=db_path):
+            with patch(
+                "dashboard.plugin_api._db_conn",
+                side_effect=sqlite3.OperationalError("probe failure"),
+            ):
+                with self.assertRaises(HTTPException) as ctx:
+                    asyncio.run(get_stats(profile="default"))
+
+        self.assertEqual(ctx.exception.status_code, 500)
+
 
 if __name__ == "__main__":
     unittest.main()
