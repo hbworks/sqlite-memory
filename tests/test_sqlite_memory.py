@@ -111,6 +111,36 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
             self.assertIn("memories", tables)
             self.assertIn("memories_fts", tables)
 
+    def test_backup_paths_only_lists_databases_outside_hermes_backup_root(self):
+        """Hermes backs up in-root databases itself and provider paths are external-only."""
+        from types import ModuleType
+        from unittest.mock import patch
+
+        hermes_root = Path(self.tmpdir) / ".hermes"
+        core_constants = ModuleType("hermes_constants")
+        core_constants.get_default_hermes_root = lambda: hermes_root
+        with patch.dict(sys.modules, {"hermes_constants": core_constants}):
+            hermes_home = hermes_root / "profiles" / "coding"
+            self.provider._hermes_home = hermes_home
+            self.provider._db_path = hermes_home / "memory.db"
+            self.assertEqual(self.provider.backup_paths(), [])
+
+            # A database shared at the Hermes root is already included in the root backup.
+            self.provider._db_path = hermes_root / "memory.db"
+            self.assertEqual(self.provider.backup_paths(), [])
+
+            # A nested HERMES_HOME beneath the default root still uses that root's backup.
+            self.provider._hermes_home = hermes_root / "coding"
+            self.assertEqual(self.provider.backup_paths(), [])
+
+            external_db = Path(self.tmpdir) / "external" / "shared-memory.db"
+            self.provider._db_path = external_db
+            self.assertEqual(self.provider.backup_paths(), [str(external_db.resolve())])
+
+            relative_db = Path("relative-shared.db")
+            self.provider._db_path = relative_db
+            self.assertEqual(self.provider.backup_paths(), [str(relative_db.resolve())])
+
     def test_add_and_list_memories(self):
         """Should add memories and retrieve them with list_memories."""
         mem_id1 = self.provider.add_memory("User prefers dark mode UI", category="preference")
@@ -173,6 +203,141 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
         self.provider.sync_turn("私の好みを覚えておいて：ダークテーマを優先すること", "承知いたしました。")
         all_pref = self.provider.list_memories(category="preference")
         self.assertEqual(len(all_pref), 2)
+
+    def test_on_memory_write_remove_deletes_only_mirrored_row(self):
+        """Removing a built-in memory deletes its SQLite mirror, not an independent row."""
+        previous_content = "Keep the deployment window on Tuesdays"
+        mirrored_id = self.provider.add_memory(
+            previous_content, category="general", source="system_sync"
+        )
+        independent_id = self.provider.add_memory(
+            previous_content, category="general", source="manual"
+        )
+
+        self.provider.on_memory_write(
+            "remove", "memory", "",
+            metadata={"previous_content": previous_content},
+        )
+
+        with self.provider._conn() as conn:
+            rows = conn.execute(
+                "SELECT id, source FROM memories WHERE content = ? ORDER BY id",
+                (previous_content,),
+            ).fetchall()
+        self.assertEqual([(row["id"], row["source"]) for row in rows], [(independent_id, "manual")])
+        self.assertNotEqual(mirrored_id, independent_id)
+
+    def test_on_memory_write_replace_updates_mirror_in_place(self):
+        """Replacing a built-in memory preserves the mirrored row ID and unrelated row."""
+        previous_content = "The release branch is named alpha"
+        mirrored_id = self.provider.add_memory(
+            previous_content, category="general", source="system_sync"
+        )
+        independent_id = self.provider.add_memory(
+            previous_content, category="general", source="manual"
+        )
+
+        self.provider.on_memory_write(
+            "replace", "memory", "The release branch is named omega",
+            metadata={"previous_content": previous_content},
+        )
+
+        with self.provider._conn() as conn:
+            rows = conn.execute(
+                "SELECT id, content, source FROM memories ORDER BY id"
+            ).fetchall()
+        self.assertEqual(
+            [(row["id"], row["content"], row["source"]) for row in rows],
+            [
+                (mirrored_id, "The release branch is named omega", "system_sync"),
+                (independent_id, previous_content, "manual"),
+            ],
+        )
+        self.assertEqual(
+            [row["id"] for row in self.provider.search_memories("alpha")],
+            [independent_id],
+        )
+        self.assertEqual(
+            [row["id"] for row in self.provider.search_memories("omega")],
+            [mirrored_id],
+        )
+
+    def test_on_memory_write_replace_matches_normalized_previous_content(self):
+        """Replacement matching tolerates Unicode width and whitespace differences."""
+        mirrored_id = self.provider.add_memory(
+            "Ｐｒｏｊｅｃｔ：  use\tPython", category="general", source="system_sync"
+        )
+
+        self.provider.on_memory_write(
+            "replace", "memory", "Project now uses Go",
+            metadata={"previous_content": "Project: use Python"},
+        )
+
+        with self.provider._conn() as conn:
+            row = conn.execute(
+                "SELECT id, content FROM memories WHERE id = ?", (mirrored_id,)
+            ).fetchone()
+        self.assertEqual((row["id"], row["content"]), (mirrored_id, "Project now uses Go"))
+
+    def test_on_memory_write_ambiguous_normalized_match_is_ignored(self):
+        """A lossy fallback match must not edit multiple distinct mirrored entries."""
+        first_content = "Fact:  use Python"
+        second_content = "Fact: use  Python"
+        first_id = self.provider.add_memory(first_content, source="system_sync")
+        second_id = self.provider.add_memory(second_content, source="system_sync")
+
+        with self.assertLogs(sqlite_memory_module.logger, level="WARNING"):
+            self.provider.on_memory_write(
+                "replace", "memory", "Use Go",
+                metadata={"previous_content": "Fact: use Python"},
+            )
+
+        with self.provider._conn() as conn:
+            rows = conn.execute(
+                "SELECT id, content FROM memories WHERE id IN (?, ?) ORDER BY id",
+                (first_id, second_id),
+            ).fetchall()
+        self.assertEqual(
+            [(row["id"], row["content"]) for row in rows],
+            [(first_id, first_content), (second_id, second_content)],
+        )
+
+    def test_on_memory_write_replace_without_previous_content_does_not_insert(self):
+        """A legacy replace without authoritative identity must not create a new row."""
+        self.provider.on_memory_write("replace", "memory", "New native memory content")
+
+        self.assertEqual(self.provider.list_memories(), [])
+
+    def test_on_memory_write_remove_is_scoped_to_target_category(self):
+        """Removing a memory mirror leaves an identical user-target mirror intact."""
+        content = "Shared text in two native memory scopes"
+        memory_id = self.provider.add_memory(content, category="general", source="system_sync")
+        user_id = self.provider.add_memory(content, category="user", source="system_sync")
+
+        self.provider.on_memory_write(
+            "remove", "memory", "", metadata={"previous_content": content}
+        )
+
+        with self.provider._conn() as conn:
+            rows = conn.execute(
+                "SELECT id, category FROM memories ORDER BY id"
+            ).fetchall()
+        self.assertEqual([(row["id"], row["category"]) for row in rows], [(user_id, "user")])
+        self.assertNotEqual(memory_id, user_id)
+
+    def test_session_switch_rebinds_session_id(self):
+        """Subsequent provider writes are attributed to the switched session."""
+        self.provider.on_session_switch(
+            "session-after", parent_session_id="session-before", reset=True,
+            reason="new_session",
+        )
+        memory_id = self.provider.add_memory("Session-specific fact")
+
+        with self.provider._conn() as conn:
+            row = conn.execute(
+                "SELECT session_id FROM memories WHERE id = ?", (memory_id,)
+            ).fetchone()
+        self.assertEqual(row["session_id"], "session-after")
 
     def test_handle_tool_call(self):
         """Should dispatch tool calls to corresponding provider methods."""
@@ -417,7 +582,9 @@ memory:
 
         old_home = os.environ.get("HERMES_HOME")
         try:
-            custom_dir = Path(self.tmpdir) / "isolated_hermes"
+            # Use a path whose parents do not include "profiles"; TMPDIR may itself
+            # be inside a named Hermes profile during runtime validation.
+            custom_dir = Path(__file__).resolve().parent / "isolated_hermes"
             os.environ["HERMES_HOME"] = str(custom_dir)
             root = _get_hermes_root()
             self.assertEqual(root, custom_dir)

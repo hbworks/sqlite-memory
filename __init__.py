@@ -12,6 +12,7 @@ import os
 import re
 import sqlite3
 import threading
+import unicodedata
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional
@@ -170,11 +171,37 @@ def _setup_schema_fields(schema) -> List[Dict[str, Any]]:
     return fields
 
 
+def _normalize_memory_content(content: str) -> str:
+    """Normalize text conservatively for matching mirrored entries."""
+    normalized = unicodedata.normalize("NFKC", content)
+    return " ".join(normalized.split())
+
+
+def _get_hermes_backup_root(hermes_home: Path) -> Path:
+    """Resolve the root covered by Hermes backup for a profile-scoped home."""
+    resolved_home = hermes_home.expanduser().resolve()
+    try:
+        from hermes_constants import get_default_hermes_root
+        backup_root = Path(get_default_hermes_root()).expanduser().resolve()
+        resolved_home.relative_to(backup_root)
+        return backup_root
+    except (ImportError, OSError, RuntimeError, ValueError):
+        pass
+
+    parts = resolved_home.parts
+    if ".hermes" in parts:
+        return Path(*parts[:parts.index(".hermes") + 1])
+    if resolved_home.parent.name == "profiles":
+        return resolved_home.parent.parent
+    return resolved_home
+
+
 class SQLiteMemoryProvider(MemoryProvider):
     """Local SQLite-backed persistent memory provider with FTS5 search."""
 
     def __init__(self) -> None:
         super().__init__()
+        self._hermes_home = _get_hermes_home_dir()
         self._db_path = _get_configured_db_path()
         self._auto_extract = True
         self._max_recall = MAX_RECALL_RESULTS
@@ -286,6 +313,7 @@ class SQLiteMemoryProvider(MemoryProvider):
         self._session_id = session_id
         self._last_recall_count = 0
         hermes_home = kwargs.get("hermes_home")
+        self._hermes_home = _get_hermes_home_dir(hermes_home)
 
         try:
             from hermes_cli.config import load_config, cfg_get
@@ -443,13 +471,105 @@ class SQLiteMemoryProvider(MemoryProvider):
                 logger.info("SQLiteMemoryProvider auto-extracted memory: %s", item)
                 break
 
-    def on_memory_write(self, action: str, target: str, content: str) -> None:
-        if action in {"add", "replace"} and content:
-            category = "user" if target == "user" else "general"
-            self.add_memory(content=content, category=category, source="system_sync")
+    def on_session_switch(
+        self,
+        new_session_id: str,
+        *,
+        parent_session_id: str = "",
+        reset: bool = False,
+        rewound: bool = False,
+        **kwargs,
+    ) -> None:
+        """Rebind subsequent writes after the core switches the active conversation."""
+        if new_session_id:
+            self._session_id = new_session_id
+
+    def on_memory_write(
+        self,
+        action: str,
+        target: str,
+        content: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Mirror committed built-in memory writes without turning edits into new rows."""
+        category = "user" if target == "user" else "general"
+        if action == "add":
+            if content and content.strip():
+                self.add_memory(content=content, category=category, source="system_sync")
+            return
+
+        if action not in {"replace", "remove"} or not isinstance(metadata, dict):
+            return
+
+        previous_content = metadata.get("previous_content")
+        if not isinstance(previous_content, str) or not previous_content.strip():
+            # old_text is not authoritative identity; never guess which row to edit.
+            return
+
+        with self._conn() as conn:
+            exact_matches = conn.execute(
+                """SELECT id, content FROM memories
+                   WHERE source = 'system_sync' AND category = ? AND content = ?""",
+                (category, previous_content),
+            ).fetchall()
+            if exact_matches:
+                matches = exact_matches
+            else:
+                normalized_previous = _normalize_memory_content(previous_content)
+                if not normalized_previous:
+                    return
+                candidates = conn.execute(
+                    "SELECT id, content FROM memories WHERE source = 'system_sync' AND category = ?",
+                    (category,),
+                ).fetchall()
+                matches = [
+                    row
+                    for row in candidates
+                    if _normalize_memory_content(row["content"]) == normalized_previous
+                ]
+                if len(matches) > 1:
+                    logger.warning(
+                        "Skipping ambiguous normalized SQLite memory %s",
+                        action,
+                    )
+                    return
+
+            if not matches:
+                return
+
+            new_content = content.strip() if isinstance(content, str) else ""
+            if action == "replace" and not new_content:
+                return
+
+            with conn:
+                for row in matches:
+                    memory_id = int(row["id"])
+                    if action == "remove":
+                        conn.execute(
+                            """DELETE FROM memories
+                               WHERE id = ? AND source = 'system_sync' AND category = ? AND content = ?""",
+                            (memory_id, category, row["content"]),
+                        )
+                    else:
+                        conn.execute(
+                            """UPDATE memories
+                               SET content = ?, category = ?, updated_at = CURRENT_TIMESTAMP
+                               WHERE id = ? AND source = 'system_sync' AND category = ? AND content = ?""",
+                            (new_content, category, memory_id, category, row["content"]),
+                        )
 
     def backup_paths(self) -> List[str]:
-        return [str(self._db_path)]
+        """Return provider state outside the root already covered by Hermes backup."""
+        try:
+            db_path = self._db_path.expanduser().resolve()
+            backup_root = _get_hermes_backup_root(self._hermes_home)
+            db_path.relative_to(backup_root)
+            return []
+        except ValueError:
+            return [str(db_path)]
+        except (OSError, RuntimeError):
+            # Include an unresolved path rather than silently omitting declared state.
+            return [str(self._db_path.expanduser().absolute())]
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
         return [REMEMBER_SCHEMA, SEARCH_SCHEMA, FORGET_SCHEMA, LIST_SCHEMA]

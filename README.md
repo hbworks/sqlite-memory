@@ -109,8 +109,9 @@ DB_PATH="$HOME/.hermes/memory.db"
 # Inspect the 10 most recent memories
 sqlite3 "$DB_PATH" "SELECT id, category, content, created_at FROM memories ORDER BY id DESC LIMIT 10;"
 
-# Create a manual backup
-cp "$DB_PATH" "${DB_PATH%.db}_backup.db"
+# Create a consistent backup, including committed WAL contents
+BACKUP_PATH="${DB_PATH%.db}_backup.db"
+python3 -c 'import sqlite3,sys; src=sqlite3.connect(sys.argv[1]); dst=sqlite3.connect(sys.argv[2]); src.backup(dst); dst.close(); src.close()' "$DB_PATH" "$BACKUP_PATH"
 ```
 
 <br>
@@ -229,6 +230,7 @@ DB_PATH="$HOME/.hermes/memory.db"
 # 記憶の一覧を確認
 sqlite3 "$DB_PATH" "SELECT id, category, content, created_at FROM memories ORDER BY id DESC LIMIT 10;"
 
-# バックアップの作成
-cp "$DB_PATH" "${DB_PATH%.db}_backup.db"
+# WAL にコミット済みの内容も含めて整合性のあるバックアップを作成
+BACKUP_PATH="${DB_PATH%.db}_backup.db"
+python3 -c 'import sqlite3,sys; src=sqlite3.connect(sys.argv[1]); dst=sqlite3.connect(sys.argv[2]); src.backup(dst); dst.close(); src.close()' "$DB_PATH" "$BACKUP_PATH"
 ```
