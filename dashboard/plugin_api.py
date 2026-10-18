@@ -14,6 +14,11 @@ from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional
 
 try:
+    from ..memory_stats import collect_memory_stats
+except ImportError:
+    from memory_stats import collect_memory_stats
+
+try:
     from fastapi import APIRouter, HTTPException, Query, status as http_status
     from pydantic import BaseModel, Field
 except ImportError:
@@ -320,17 +325,10 @@ async def get_stats(profile: Optional[str] = Query(None, description="Profile na
     db_path = _get_db_path(profile)
     try:
         with _db_conn(profile) as conn:
-            total_row = conn.execute("SELECT COUNT(*) as cnt FROM memories").fetchone()
-            total = total_row["cnt"] if total_row else 0
-            cat_rows = conn.execute("SELECT category, COUNT(*) as cnt FROM memories GROUP BY category").fetchall()
-            categories = {row["category"]: row["cnt"] for row in cat_rows}
-            size_bytes = db_path.stat().st_size if db_path.exists() else 0
-
+            stats = collect_memory_stats(conn, db_path)
             return {
-                "total_memories": total,
-                "categories": categories,
+                **stats,
                 "db_path": str(db_path),
-                "db_size_bytes": size_bytes,
                 "profile": profile or "default",
                 "available_profiles": _get_available_profiles(),
             }

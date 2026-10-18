@@ -767,6 +767,49 @@ memory:
 
         asyncio.run(run())
 
+    def test_stats_endpoint_returns_requested_metrics(self):
+        import asyncio
+        from dashboard.plugin_api import (
+            MemoryCreateRequest,
+            create_memory,
+            get_stats,
+        )
+
+        old_home = os.environ.get("HERMES_HOME")
+        hermes_root = Path(self.tmpdir) / ".hermes"
+        hermes_root.mkdir()
+        os.environ["HERMES_HOME"] = str(hermes_root)
+
+        async def run():
+            empty = await get_stats(profile="default")
+            await create_memory(
+                MemoryCreateRequest(content="stats sentinel", category="project"),
+                profile="default",
+            )
+            populated = await get_stats(profile="default")
+            return empty, populated
+
+        try:
+            empty, populated = asyncio.run(run())
+        finally:
+            if old_home is None:
+                os.environ.pop("HERMES_HOME", None)
+            else:
+                os.environ["HERMES_HOME"] = old_home
+
+        self.assertEqual(empty["total_memories"], 0)
+        self.assertEqual(empty["categories"], {})
+        self.assertIsNone(empty["last_updated_at"])
+        self.assertGreaterEqual(empty["wal_size_bytes"], 0)
+
+        self.assertEqual(populated["total_memories"], 1)
+        self.assertEqual(populated["categories"], {"project": 1})
+        self.assertTrue(populated["last_updated_at"])
+        self.assertGreater(populated["db_size_bytes"], 0)
+        self.assertIsInstance(populated["wal_size_bytes"], int)
+        for key in ("db_path", "profile", "available_profiles"):
+            self.assertIn(key, populated)
+
 
 if __name__ == "__main__":
     unittest.main()
