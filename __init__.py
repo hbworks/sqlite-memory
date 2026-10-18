@@ -476,17 +476,24 @@ class SQLiteMemoryProvider(MemoryProvider):
             return collect_memory_stats(conn, self._db_path)
 
     def sync_turn(self, user_content: str, assistant_content: str, *, session_id: str = "") -> None:
-        if not self._auto_extract or not user_content or len(user_content.strip()) < 5:
+        if not self._auto_extract or not user_content:
             return
+
+        text = user_content.strip()
+        if len(text) < 5:
+            return
+
+        # Only inspect a leading directive line; searching the whole turn can
+        # capture quoted code, examples, or Markdown table text as a memory.
+        directive_line = text.splitlines()[0].strip()
 
         explicit_patterns = [
             r"(?:(?:please\s+)?remember\s+(?:that|to)?\s*:?\s*)(.+)",
             r"(?:(?:これ|以下|次|私の好みを?)\s*覚えて(?:おいて|ください|ね)?\s*[:：]?\s*)(.+)",
             r"(?:(?:今後|次回から|これからは)\s*(.+)(?:にして|を使って|でやって))",
         ]
-        text = user_content.strip()
         for pat in explicit_patterns:
-            m = re.search(pat, text, re.IGNORECASE)
+            m = re.fullmatch(pat, directive_line, re.IGNORECASE)
             if m and m.group(1):
                 item = m.group(1).strip()
                 self.add_memory(content=item, category="preference", source="auto_extract")
