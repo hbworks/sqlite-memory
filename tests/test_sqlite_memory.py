@@ -95,7 +95,8 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
         ctx = CaptureContext()
         sqlite_memory_module.register(ctx)
 
-        self.assertEqual(len(ctx.tools), 4)
+        self.assertEqual(len(ctx.tools), 5)
+        self.assertIn("sqlite_stats", {registration["name"] for registration in ctx.tools})
         for registration in ctx.tools:
             schema = registration["schema"]
             self.assertEqual(schema.get("name"), registration["name"])
@@ -352,6 +353,20 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
         # List
         res_list = self.provider.handle_tool_call("sqlite_list_memories", {"category": "config"})
         self.assertIn("port 8080", res_list)
+
+    def test_sqlite_stats_tool_returns_metrics(self):
+        import json
+
+        self.provider.add_memory("stats sentinel", category="project")
+        result = json.loads(self.provider.handle_tool_call("sqlite_stats", {}))
+
+        self.assertEqual(result.get("status"), "success")
+        self.assertEqual(result["total_memories"], 1)
+        self.assertEqual(result["categories"], {"project": 1})
+        self.assertTrue(result["last_updated_at"])
+        self.assertGreater(result["db_size_bytes"], 0)
+        self.assertIsInstance(result["wal_size_bytes"], int)
+        self.assertNotIn("db_path", result)
 
 
 class TestDashboardSecurityAndIntegrity(unittest.TestCase):

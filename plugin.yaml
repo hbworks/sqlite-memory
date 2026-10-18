@@ -8,6 +8,7 @@ provides_tools:
   - sqlite_search
   - sqlite_forget
   - sqlite_list_memories
+  - sqlite_stats
 dashboard:
   manifest: dashboard/manifest.json
 

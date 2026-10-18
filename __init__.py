@@ -18,6 +18,11 @@ from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional
 
 try:
+    from .memory_stats import collect_memory_stats
+except ImportError:
+    from memory_stats import collect_memory_stats
+
+try:
     from agent.memory_provider import MemoryProvider, RecallStatus
 except ImportError:
     class MemoryProvider:  # type: ignore
@@ -96,6 +101,18 @@ LIST_SCHEMA = {
                 "category": {"type": "string", "description": "Optional category filter."},
                 "limit": {"type": "integer", "description": "Maximum number of memories (default 10).", "default": 10},
             },
+        },
+    },
+}
+
+STATS_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "sqlite_stats",
+        "description": "Get counts, categories, last update time, and SQLite database/WAL sizes.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
         },
     },
 }
@@ -453,6 +470,11 @@ class SQLiteMemoryProvider(MemoryProvider):
             params.append(limit)
             return [dict(row) for row in conn.execute(sql, params).fetchall()]
 
+    def get_stats(self) -> Dict[str, Any]:
+        """Return counts and on-disk sizes for the active provider database."""
+        with self._conn() as conn:
+            return collect_memory_stats(conn, self._db_path)
+
     def sync_turn(self, user_content: str, assistant_content: str, *, session_id: str = "") -> None:
         if not self._auto_extract or not user_content or len(user_content.strip()) < 5:
             return
@@ -572,7 +594,7 @@ class SQLiteMemoryProvider(MemoryProvider):
             return [str(self._db_path.expanduser().absolute())]
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
-        return [REMEMBER_SCHEMA, SEARCH_SCHEMA, FORGET_SCHEMA, LIST_SCHEMA]
+        return [REMEMBER_SCHEMA, SEARCH_SCHEMA, FORGET_SCHEMA, LIST_SCHEMA, STATS_SCHEMA]
 
     def handle_tool_call(self, tool_name: str, args: dict, **kwargs) -> str:
         try:
@@ -600,6 +622,9 @@ class SQLiteMemoryProvider(MemoryProvider):
             if tool_name == "sqlite_list_memories":
                 memories = self.list_memories(category=args.get("category"), limit=int(args.get("limit", 10)))
                 return json.dumps({"status": "success", "count": len(memories), "memories": memories})
+
+            if tool_name == "sqlite_stats":
+                return json.dumps({"status": "success", **self.get_stats()})
 
             return json.dumps({"error": f"Unknown tool: {tool_name}"})
         except Exception as e:
