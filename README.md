@@ -93,6 +93,7 @@ Restart Hermes Agent to activate the plugin.
 | `sqlite_search` | Keyword and full-text search (FTS5) over memories | `query` (search terms), `limit` (max results) |
 | `sqlite_forget` | Deletes a memory record by ID | `memory_id` (memory ID to remove) |
 | `sqlite_list_memories` | Lists recent memories with optional category filter | `category` (filter category), `limit` (count) |
+| `sqlite_stats` | Returns memory count, category counts, last update time, database size, and WAL size | None |
 
 ---
 
@@ -214,6 +215,7 @@ Hermes Agent を起動・再起動すれば自動的に有効化されます。
 | `sqlite_search` | 記憶をキーワード/全文検索する | `query`（検索語句）, `limit`（最大件数） |
 | `sqlite_forget` | 不要な記憶をID指定で削除する | `memory_id`（記憶ID） |
 | `sqlite_list_memories` | 最近保存された記憶の一覧を取得する | `category`（絞り込み）, `limit`（件数） |
+| `sqlite_stats` | 記憶件数・カテゴリ別件数・最終更新日時・DB本体サイズ・WALサイズを返す | なし |
 
 ---
 
