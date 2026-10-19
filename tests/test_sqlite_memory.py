@@ -202,8 +202,45 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
         fields_by_key = {field["key"]: field for field in fields}
 
         self.assertEqual(set(fields_by_key), {"db_path", "auto_extract", "max_recall"})
+        self.assertEqual(fields_by_key["db_path"]["default"], "")
         self.assertEqual(fields_by_key["auto_extract"]["choices"], ["true", "false"])
         self.assertFalse(fields_by_key["auto_extract"]["secret"])
+
+    def test_declared_config_schema_leaves_database_path_blank(self):
+        import importlib.util
+        import types
+        from unittest.mock import patch
+
+        plugins_module = types.ModuleType("plugins")
+        plugins_module.__path__ = []
+        memory_module = types.ModuleType("plugins.memory")
+        memory_module.__path__ = []
+        schema_api = types.ModuleType("plugins.memory.config_schema")
+        schema_api.KIND_BOOL = "bool"
+        schema_api.KIND_NUMBER = "number"
+        schema_api.KIND_TEXT = "text"
+        schema_api.ProviderField = lambda **values: types.SimpleNamespace(**values)
+        schema_api.ProviderConfigSchema = lambda **values: types.SimpleNamespace(**values)
+
+        spec = importlib.util.spec_from_file_location(
+            "_sqlite_memory_config_schema_test", plugin_dir / "config_schema.py"
+        )
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        with patch.dict(
+            sys.modules,
+            {
+                "plugins": plugins_module,
+                "plugins.memory": memory_module,
+                "plugins.memory.config_schema": schema_api,
+            },
+        ):
+            spec.loader.exec_module(module)
+
+        fields_by_key = {field.key: field for field in module.CONFIG_SCHEMA.fields}
+        self.assertEqual(fields_by_key["db_path"].default, "")
+        self.assertIn("leave blank", fields_by_key["db_path"].description.lower())
 
     def test_config_schema_matches_memory_setup_contract(self):
         """Memory setup expects a list of field dictionaries, not the UI schema object."""

@@ -262,8 +262,8 @@ class SQLiteMemoryProvider(MemoryProvider):
             return [
                 {
                     "key": "db_path",
-                    "description": "Path to SQLite database",
-                    "default": str(self._db_path),
+                    "description": "Optional; leave blank for the active profile's memory.db.",
+                    "default": "",
                     "secret": False,
                 },
                 {

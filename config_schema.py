@@ -16,8 +16,11 @@ CONFIG_SCHEMA = ProviderConfigSchema(
             key="db_path",
             label="Database Path",
             kind=KIND_TEXT,
-            default="~/.hermes/memory.db",
-            description="File path for the SQLite database storing long-term memories.",
+            default="",
+            description=(
+                "Optional; leave blank for the active profile's memory.db. "
+                "Set only for a custom or shared database."
+            ),
             inline=True,
         ),
         ProviderField(
