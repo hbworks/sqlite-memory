@@ -9,19 +9,32 @@ import logging
 import os
 import re
 import sqlite3
+import sys
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional
 
 try:
     from ..memory_stats import collect_memory_stats
-except ImportError:
-    from memory_stats import collect_memory_stats
+except (ImportError, ValueError):
+    try:
+        from memory_stats import collect_memory_stats
+    except ImportError:
+        _plugin_root = str(Path(__file__).resolve().parent.parent)
+        if _plugin_root not in sys.path:
+            sys.path.insert(0, _plugin_root)
+        from memory_stats import collect_memory_stats
 
 try:
     from ..memory_schema import ensure_memory_schema
-except ImportError:
-    from memory_schema import ensure_memory_schema
+except (ImportError, ValueError):
+    try:
+        from memory_schema import ensure_memory_schema
+    except ImportError:
+        _plugin_root = str(Path(__file__).resolve().parent.parent)
+        if _plugin_root not in sys.path:
+            sys.path.insert(0, _plugin_root)
+        from memory_schema import ensure_memory_schema
 
 try:
     from fastapi import APIRouter, HTTPException, Query, status as http_status

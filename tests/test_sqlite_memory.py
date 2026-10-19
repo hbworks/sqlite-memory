@@ -1224,6 +1224,24 @@ memory:
 
         self.assertEqual(ctx.exception.status_code, 500)
 
+    def test_plugin_api_standalone_import_resolves_dependencies(self):
+        """Web server dashboard loads plugin_api via spec_from_file_location without parent package."""
+        import importlib.util
+        from unittest.mock import patch
+
+        api_file = plugin_dir / "dashboard" / "plugin_api.py"
+        spec = importlib.util.spec_from_file_location("standalone_dashboard_plugin_api_test", api_file)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        mod = importlib.util.module_from_spec(spec)
+        # Verify that even when neither ..memory_stats nor memory_stats is on sys.path,
+        # plugin_api resolves them via its parent directory.
+        filtered_path = [p for p in sys.path if str(plugin_dir) not in p]
+        with patch.object(sys, "path", filtered_path):
+            spec.loader.exec_module(mod)
+        self.assertTrue(hasattr(mod, "router"))
+        self.assertGreater(len(mod.router.routes), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

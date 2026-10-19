@@ -21,6 +21,18 @@ import { jsx, jsxs } from 'react/jsx-runtime'
 
 let _rest = null
 
+const getLocale = () => {
+  if (typeof document !== 'undefined') {
+    const docLang = document.documentElement?.lang || document.documentElement?.getAttribute('lang')
+    if (docLang && docLang.toLowerCase().startsWith('ja')) return 'ja'
+  }
+  if (typeof navigator !== 'undefined') {
+    const langs = navigator.languages || [navigator.language || navigator.userLanguage || '']
+    if (langs.some((l) => l && l.toLowerCase().startsWith('ja'))) return 'ja'
+  }
+  return 'en'
+}
+
 /**
  * バックエンド API 通信レイヤー
  * 1. Electron IPC (window.hermesDesktop.api)
@@ -95,43 +107,43 @@ async function api(path, options = {}) {
 }
 
 const t = {
-  preference: 'Preference',
-  project: 'Project',
-  rule: 'Rule',
-  general: 'General',
-  all: 'All',
-  searchPlaceholder: 'Search "Rust", etc...',
-  addMemory: 'Add Memory',
-  category: 'Category',
-  totalCount: (total) => `Total: ${total}`,
-  refresh: 'Refresh',
-  loading: 'Loading...',
-  noMatches: 'No matches found',
-  noMemories: 'No memories found',
-  tryOtherKeyword: 'Try a different keyword',
-  emptyHint: 'Add one using "+ Add Memory"',
-  backToList: 'Back to list',
-  edit: 'Edit',
-  delete: 'Delete',
-  created: 'Created: ',
-  updated: 'Updated: ',
-  source: 'Source: ',
-  contentHeading: 'Memory Content',
-  selectPrompt: 'Select a memory from the left list',
-  editModalTitle: (id) => `Edit Memory #${id}`,
-  addModalTitle: 'Add New Memory',
-  contentLabel: 'Memory Content',
-  placeholderExample: 'e.g., Always use strict mode for this project',
-  cancel: 'Cancel',
-  saving: 'Saving...',
-  save: 'Save',
-  deleteConfirm: (id) => `Delete Memory #${id}?`,
-  saveError: (m) => `Save error: ${m}`,
-  deleteError: (m) => `Delete error: ${m}`,
-  defaultProfileLabel: 'Default (~/.hermes)',
-  profileLabel: 'Profile:',
-  storageLabel: 'Storage:'
-};
+  get preference() { return getLocale() === 'ja' ? '設定・好み' : 'Preference' },
+  get project() { return getLocale() === 'ja' ? 'プロジェクト' : 'Project' },
+  get rule() { return getLocale() === 'ja' ? 'ルール' : 'Rule' },
+  get general() { return getLocale() === 'ja' ? '一般' : 'General' },
+  get all() { return getLocale() === 'ja' ? 'すべて' : 'All' },
+  get searchPlaceholder() { return getLocale() === 'ja' ? '「Rust」などを検索' : 'Search "Rust", etc...' },
+  get addMemory() { return getLocale() === 'ja' ? '記憶を追加' : 'Add Memory' },
+  get category() { return getLocale() === 'ja' ? 'カテゴリ' : 'Category' },
+  totalCount: (total) => getLocale() === 'ja' ? `合計: ${total} 件` : `Total: ${total}`,
+  get refresh() { return getLocale() === 'ja' ? '更新' : 'Refresh' },
+  get loading() { return getLocale() === 'ja' ? '読み込み中...' : 'Loading...' },
+  get noMatches() { return getLocale() === 'ja' ? '一致なし' : 'No matches found' },
+  get noMemories() { return getLocale() === 'ja' ? '記憶がありません' : 'No memories found' },
+  get tryOtherKeyword() { return getLocale() === 'ja' ? '別のキーワードをお試しください' : 'Try a different keyword' },
+  get emptyHint() { return getLocale() === 'ja' ? '「+ 記憶を追加」から登録できます' : 'Add one using "+ Add Memory"' },
+  get backToList() { return getLocale() === 'ja' ? '一覧に戻る' : 'Back to list' },
+  get edit() { return getLocale() === 'ja' ? '編集' : 'Edit' },
+  get delete() { return getLocale() === 'ja' ? '削除' : 'Delete' },
+  get created() { return getLocale() === 'ja' ? '作成: ' : 'Created: ' },
+  get updated() { return getLocale() === 'ja' ? '更新: ' : 'Updated: ' },
+  get source() { return getLocale() === 'ja' ? '登録元: ' : 'Source: ' },
+  get contentHeading() { return getLocale() === 'ja' ? '記憶の内容' : 'Memory Content' },
+  get selectPrompt() { return getLocale() === 'ja' ? '左の一覧から記憶を選択してください' : 'Select a memory from the left list' },
+  editModalTitle: (id) => getLocale() === 'ja' ? `Memory #${id} を編集` : `Edit Memory #${id}`,
+  get addModalTitle() { return getLocale() === 'ja' ? '新しい記憶を追加' : 'Add New Memory' },
+  get contentLabel() { return getLocale() === 'ja' ? '記憶内容' : 'Memory Content' },
+  get placeholderExample() { return getLocale() === 'ja' ? '例: このプロジェクトでは strict モードを有効にする' : 'e.g., Always use strict mode for this project' },
+  get cancel() { return getLocale() === 'ja' ? 'キャンセル' : 'Cancel' },
+  get saving() { return getLocale() === 'ja' ? '保存中...' : 'Saving...' },
+  get save() { return getLocale() === 'ja' ? '保存する' : 'Save' },
+  deleteConfirm: (id) => getLocale() === 'ja' ? `Memory #${id} を削除しますか？` : `Delete Memory #${id}?`,
+  saveError: (m) => getLocale() === 'ja' ? `保存エラー: ${m}` : `Save error: ${m}`,
+  deleteError: (m) => getLocale() === 'ja' ? `削除エラー: ${m}` : `Delete error: ${m}`,
+  get defaultProfileLabel() { return getLocale() === 'ja' ? 'デフォルト (~/.hermes)' : 'Default (~/.hermes)' },
+  get profileLabel() { return getLocale() === 'ja' ? 'プロファイル:' : 'Profile:' },
+  get storageLabel() { return getLocale() === 'ja' ? '保存先:' : 'Storage:' }
+}
 
 /**
  * カテゴリ別スタイル設定
@@ -274,16 +286,17 @@ function useMemoryState() {
   const [query, setQuery] = useState('')
   const [selectedCategory, setSelectedCategory] = useState('all')
 
-  const getInitialProfile = () => {
-    try {
-      const stored = typeof localStorage !== 'undefined' ? localStorage.getItem('hermes_sqlite_memory_profile') : null
-      if (stored) return stored
-    } catch (_) {}
-    return 'assistant'
-  }
+  const focusedProfileAtom = host.state?.focusedSessionProfile || host.state?.profile
+  const hostProfileName = useValue(focusedProfileAtom)
 
-  const [selectedProfile, setSelectedProfile] = useState(getInitialProfile)
-  const [availableProfiles, setAvailableProfiles] = useState(['assistant', 'buddy', 'coding', 'research', 'default'])
+  const [selectedProfile, setSelectedProfile] = useState(() => hostProfileName || 'default')
+  const [availableProfiles, setAvailableProfiles] = useState(() => {
+    const initial = ['default']
+    if (hostProfileName && !initial.includes(hostProfileName)) {
+      initial.unshift(hostProfileName)
+    }
+    return initial
+  })
   const [selectedId, setSelectedId] = useState(null)
   const [total, setTotal] = useState(0)
   const [categories, setCategories] = useState({})
@@ -298,25 +311,26 @@ function useMemoryState() {
 
   const containerRef = useRef(null)
   const isManuallySelected = useRef(false)
-  const focusedProfileAtom = host.state?.focusedSessionProfile || host.state?.profile
-  const hostProfileName = useValue(focusedProfileAtom)
+  const prevHostProfileRef = useRef(hostProfileName)
 
   // プロファイル変更
   const handleSelectProfile = (newProfile) => {
     isManuallySelected.current = true
     setSelectedProfile(newProfile)
-    try { localStorage.setItem('hermes_sqlite_memory_profile', newProfile) } catch (_) {}
   }
 
   // ホストで選択されたプロファイルの自動追従
   useEffect(() => {
-    if (!isManuallySelected.current && hostProfileName && hostProfileName !== 'default') {
-      const stored = typeof localStorage !== 'undefined' ? localStorage.getItem('hermes_sqlite_memory_profile') : null
-      if (!stored) {
+    if (hostProfileName) {
+      if (hostProfileName !== prevHostProfileRef.current) {
+        prevHostProfileRef.current = hostProfileName
+        isManuallySelected.current = false
+        setSelectedProfile(hostProfileName)
+      } else if (!isManuallySelected.current && selectedProfile !== hostProfileName) {
         setSelectedProfile(hostProfileName)
       }
     }
-  }, [hostProfileName])
+  }, [hostProfileName, selectedProfile])
 
   // コンテナ幅の監視（レスポンシブ切り替え）
   useEffect(() => {
