@@ -29,6 +29,10 @@ let _rest = null
  */
 async function api(path, options = {}) {
   const cleanPath = path.startsWith('/') ? path : '/' + path
+  // The query selects the data profile; the IPC field selects its backend.
+  // Keep them aligned instead of routing every profile through the primary.
+  const profile = new URLSearchParams(cleanPath.split('?')[1] || '').get('profile')
+  const profileScope = profile ? { profile } : {}
 
   // 1. Electron 環境の正規 IPC ブリッジ（window.hermesDesktop.api）を最優先
   if (typeof window !== 'undefined' && window.hermesDesktop?.api) {
@@ -43,7 +47,8 @@ async function api(path, options = {}) {
       return await window.hermesDesktop.api({
         path: `/api/plugins/sqlite-memory${cleanPath}`,
         method,
-        body
+        body,
+        ...profileScope
       })
     } catch (err1) {
       // 404等の場合は互換エンドポイント /api/plugins/sqlite_memory を試行
@@ -51,7 +56,8 @@ async function api(path, options = {}) {
         return await window.hermesDesktop.api({
           path: `/api/plugins/sqlite_memory${cleanPath}`,
           method,
-          body
+          body,
+          ...profileScope
         })
       } catch (err2) {
         throw err1
