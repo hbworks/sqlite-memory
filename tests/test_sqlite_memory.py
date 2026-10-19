@@ -25,6 +25,34 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
         self.provider._initialized = False
         self.provider._ensure_db()
 
+    @staticmethod
+    def _hermes_config_patch(config, load_calls=None):
+        import types
+        from unittest.mock import patch
+
+        def cfg_get(data, *keys, default=None):
+            value = data
+            for key in keys:
+                if not isinstance(value, dict) or key not in value:
+                    return default
+                value = value[key]
+            return value
+
+        def load_config():
+            if load_calls is not None:
+                load_calls.append("load")
+            return config
+
+        hermes_cli = types.ModuleType("hermes_cli")
+        hermes_cli.__path__ = []
+        config_module = types.ModuleType("hermes_cli.config")
+        config_module.load_config = load_config
+        config_module.cfg_get = cfg_get
+        return patch.dict(
+            sys.modules,
+            {"hermes_cli": hermes_cli, "hermes_cli.config": config_module},
+        )
+
     def test_initialize_uses_runtime_profile_home_for_database(self):
         import sqlite3
 
@@ -58,8 +86,117 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
             else:
                 os.environ["HERMES_PROFILE"] = previous_profile
 
+    def test_initialize_resolves_provider_settings_from_one_config_read(self):
+        configured_path = Path(self.tmpdir) / "canonical.db"
+        legacy_path = Path(self.tmpdir) / "legacy.db"
+        config = {
+            "memory": {
+                "sqlite-memory": {
+                    "db_path": str(configured_path),
+                    "auto_extract": False,
+                    "max_recall": 3,
+                },
+                "sqlite_memory": {
+                    "db_path": str(legacy_path),
+                    "auto_extract": True,
+                    "max_recall": 9,
+                },
+            }
+        }
+        load_calls = []
+        with self._hermes_config_patch(config, load_calls):
+            provider = SQLiteMemoryProvider()
+            provider.initialize(
+                session_id="config-test",
+                hermes_home=str(Path(self.tmpdir) / "profile"),
+            )
+
+        self.assertEqual(load_calls, ["load"])
+        self.assertEqual(provider._db_path, configured_path)
+        self.assertFalse(provider._auto_extract)
+        self.assertEqual(provider._max_recall, 3)
+
+    def test_initialize_invalid_max_recall_does_not_retain_previous_value(self):
+        configured_path = Path(self.tmpdir) / "custom.db"
+        config = {
+            "memory": {
+                "sqlite-memory": {
+                    "db_path": str(configured_path),
+                    "auto_extract": True,
+                    "max_recall": "invalid",
+                }
+            }
+        }
+        with self._hermes_config_patch(config):
+            provider = SQLiteMemoryProvider()
+            provider._max_recall = 12
+            with self.assertLogs(sqlite_memory_module.logger, level="WARNING"):
+                provider.initialize(
+                    session_id="invalid-config-test",
+                    hermes_home=str(Path(self.tmpdir) / "profile"),
+                )
+
+        self.assertEqual(provider._db_path, configured_path)
+        self.assertTrue(provider._auto_extract)
+        self.assertEqual(provider._max_recall, sqlite_memory_module.MAX_RECALL_RESULTS)
+
     def tearDown(self):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_config_schema_fallback_matches_memory_setup_contract(self):
+        fields = self.provider.get_config_schema()
+        fields_by_key = {field["key"]: field for field in fields}
+
+        self.assertEqual(set(fields_by_key), {"db_path", "auto_extract", "max_recall"})
+        self.assertEqual(fields_by_key["auto_extract"]["choices"], ["true", "false"])
+        self.assertFalse(fields_by_key["auto_extract"]["secret"])
+
+    def test_declared_config_schema_loads_by_path_without_plugin_on_sys_path(self):
+        import importlib.util
+        import types
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        plugins_module = types.ModuleType("plugins")
+        plugins_module.__path__ = []
+        memory_module = types.ModuleType("plugins.memory")
+        memory_module.__path__ = []
+        schema_api = types.ModuleType("plugins.memory.config_schema")
+        schema_api.KIND_BOOL = "bool"
+        schema_api.KIND_NUMBER = "number"
+        schema_api.KIND_TEXT = "text"
+        schema_api.ProviderField = lambda **values: SimpleNamespace(**values)
+        schema_api.ProviderConfigSchema = lambda **values: SimpleNamespace(**values)
+        spec = importlib.util.spec_from_file_location(
+            "_hermes_memory_config_schema.sqlite-memory",
+            plugin_dir / "config_schema.py",
+        )
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        isolated_path = [
+            entry
+            for entry in sys.path
+            if Path(entry or ".").resolve() != plugin_dir.resolve()
+        ]
+
+        with patch.dict(
+            sys.modules,
+            {
+                "plugins": plugins_module,
+                "plugins.memory": memory_module,
+                "plugins.memory.config_schema": schema_api,
+                "config_fields": None,
+            },
+        ):
+            with patch.object(sys, "path", isolated_path):
+                spec.loader.exec_module(module)
+
+        fields = module.CONFIG_SCHEMA.fields
+        self.assertEqual(
+            [field.key for field in fields], ["db_path", "auto_extract", "max_recall"]
+        )
+        self.assertEqual(fields[1].kind, "bool")
 
     def test_config_schema_matches_memory_setup_contract(self):
         """Memory setup expects a list of field dictionaries, not the UI schema object."""
@@ -172,6 +309,22 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
         arch_results = self.provider.search_memories("dependencies", category="architecture")
         self.assertEqual(len(arch_results), 1)
         self.assertIn("zero dependencies", arch_results[0]["content"])
+
+    def test_fts_and_like_search_return_the_same_memory_fields(self):
+        memory_id = self.provider.add_memory(
+            "The deployment uses canary releases", category="project"
+        )
+
+        fts_results = self.provider.search_memories("deployment")
+        like_results = self.provider.search_memories("deploy")
+        expected_fields = {"id", "category", "content", "created_at"}
+
+        self.assertEqual(len(fts_results), 1)
+        self.assertEqual(len(like_results), 1)
+        self.assertEqual(set(fts_results[0]), expected_fields)
+        self.assertEqual(set(like_results[0]), expected_fields)
+        self.assertEqual(fts_results[0]["id"], memory_id)
+        self.assertEqual(like_results[0]["id"], memory_id)
 
     def test_delete_memory(self):
         """Should remove memory from main table and synchronize with FTS5 table."""

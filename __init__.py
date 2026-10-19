@@ -15,12 +15,17 @@ import threading
 import unicodedata
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Generator, List, Optional
+from typing import Any, Callable, Dict, Generator, List, Optional
 
 try:
     from .memory_stats import collect_memory_stats
 except ImportError:
     from memory_stats import collect_memory_stats
+
+try:
+    from .config_fields import CONFIG_FIELD_DEFINITIONS, CONFIG_SECTION_KEYS
+except ImportError:
+    from config_fields import CONFIG_FIELD_DEFINITIONS, CONFIG_SECTION_KEYS
 
 try:
     from agent.memory_provider import MemoryProvider, RecallStatus
@@ -152,40 +157,62 @@ def _get_hermes_home_dir(hermes_home: Optional[str] = None) -> Path:
     return Path(os.path.expanduser("~/.hermes"))
 
 
-def _get_configured_db_path(hermes_home: Optional[str] = None) -> Path:
-    """Read custom DB path from config (supporting both sqlite_memory and sqlite-memory) or fallback to default."""
-    try:
-        from hermes_cli.config import load_config, cfg_get
-        config = load_config()
-        custom_path = (
-            cfg_get(config, "memory", "sqlite-memory", "db_path", default="")
-            or cfg_get(config, "memory", "sqlite_memory", "db_path", default="")
-        )
-        if custom_path:
-            return Path(os.path.expanduser(str(custom_path)))
-    except Exception:
-        pass
-    return _get_hermes_home_dir(hermes_home) / "memory.db"
+def _get_memory_config_value(
+    config: Any,
+    cfg_get: Callable[..., Any],
+    key: str,
+    default: Any = None,
+    *,
+    skip_empty: bool = False,
+) -> Any:
+    """Read a provider setting, preferring the canonical key spelling."""
+    for section in CONFIG_SECTION_KEYS:
+        value = cfg_get(config, "memory", section, key, default=None)
+        if value is not None and not (skip_empty and not value):
+            return value
+    return default
+
+
+def _setup_field_dict(
+    key: str,
+    label: str,
+    description: Optional[str],
+    default: Any,
+    secret: bool,
+    kind: str,
+    env_key: Optional[str] = None,
+    options=(),
+) -> Dict[str, Any]:
+    item = {
+        "key": key,
+        "description": description or label,
+        "default": default,
+        "secret": secret,
+    }
+    if env_key:
+        item["env_var"] = env_key
+    if kind == "bool":
+        item["choices"] = ["true", "false"]
+    elif kind == "select":
+        item["choices"] = [option.value for option in options]
+    return item
 
 
 def _setup_schema_fields(schema) -> List[Dict[str, Any]]:
     """Adapt the UI config schema to the field-dictionary contract used by memory setup."""
-    fields = []
-    for field in schema.fields:
-        item = {
-            "key": field.key,
-            "description": field.description or field.label,
-            "default": field.default,
-            "secret": field.is_secret,
-        }
-        if field.env_key:
-            item["env_var"] = field.env_key
-        if field.kind == "bool":
-            item["choices"] = ["true", "false"]
-        elif field.kind == "select":
-            item["choices"] = [option.value for option in field.options]
-        fields.append(item)
-    return fields
+    return [
+        _setup_field_dict(
+            key=field.key,
+            label=field.label,
+            description=field.description,
+            default=field.default,
+            secret=field.is_secret,
+            kind=field.kind,
+            env_key=field.env_key,
+            options=getattr(field, "options", ()),
+        )
+        for field in schema.fields
+    ]
 
 
 def _normalize_memory_content(content: str) -> str:
@@ -219,7 +246,7 @@ class SQLiteMemoryProvider(MemoryProvider):
     def __init__(self) -> None:
         super().__init__()
         self._hermes_home = _get_hermes_home_dir()
-        self._db_path = _get_configured_db_path()
+        self._db_path = self._hermes_home / "memory.db"
         self._auto_extract = True
         self._max_recall = MAX_RECALL_RESULTS
         self._session_id = ""
@@ -239,11 +266,21 @@ class SQLiteMemoryProvider(MemoryProvider):
         try:
             from .config_schema import CONFIG_SCHEMA
             return _setup_schema_fields(CONFIG_SCHEMA)
-        except Exception:
+        except ImportError:
             return [
-                {"key": "db_path", "description": "Path to SQLite database", "default": str(self._db_path)},
-                {"key": "auto_extract", "description": "Auto extract rules/preferences", "default": "true"},
-                {"key": "max_recall", "description": "Max prefetch memories", "default": "5"},
+                _setup_field_dict(
+                    key=field.key,
+                    label=field.label,
+                    description=field.description,
+                    default=(
+                        str(self._db_path)
+                        if field.key == "db_path"
+                        else field.default
+                    ),
+                    secret=False,
+                    kind=field.kind,
+                )
+                for field in CONFIG_FIELD_DEFINITIONS
             ]
 
     def _get_connection(self) -> sqlite3.Connection:
@@ -332,32 +369,43 @@ class SQLiteMemoryProvider(MemoryProvider):
         hermes_home = kwargs.get("hermes_home")
         self._hermes_home = _get_hermes_home_dir(hermes_home)
 
+        db_path = self._hermes_home / "memory.db"
+        auto_extract = True
+        max_recall = MAX_RECALL_RESULTS
         try:
             from hermes_cli.config import load_config, cfg_get
             config = load_config()
-            custom_path = (
-                cfg_get(config, "memory", "sqlite-memory", "db_path", default="")
-                or cfg_get(config, "memory", "sqlite_memory", "db_path", default="")
+            custom_path = _get_memory_config_value(
+                config, cfg_get, "db_path", default="", skip_empty=True
             )
-            self._db_path = (
-                Path(os.path.expanduser(str(custom_path)))
-                if custom_path
-                else _get_configured_db_path(hermes_home)
+            if custom_path:
+                db_path = Path(os.path.expanduser(str(custom_path)))
+
+            auto_ext = _get_memory_config_value(
+                config, cfg_get, "auto_extract", default="true"
             )
-            auto_ext = (
-                cfg_get(config, "memory", "sqlite-memory", "auto_extract", default=None)
-                if cfg_get(config, "memory", "sqlite-memory", "auto_extract", default=None) is not None
-                else cfg_get(config, "memory", "sqlite_memory", "auto_extract", default="true")
+            auto_extract = str(auto_ext).lower() in ("true", "1", "yes")
+
+            max_rec = _get_memory_config_value(
+                config, cfg_get, "max_recall", default=MAX_RECALL_RESULTS
             )
-            self._auto_extract = str(auto_ext).lower() in ("true", "1", "yes")
-            max_rec = (
-                cfg_get(config, "memory", "sqlite-memory", "max_recall", default=None)
-                if cfg_get(config, "memory", "sqlite-memory", "max_recall", default=None) is not None
-                else cfg_get(config, "memory", "sqlite_memory", "max_recall", default=5)
-            )
-            self._max_recall = int(max_rec)
-        except Exception:
-            self._db_path = _get_configured_db_path(hermes_home)
+            try:
+                max_recall = int(max_rec)
+            except (TypeError, ValueError, OverflowError):
+                logger.warning(
+                    "Invalid SQLite memory max_recall %r; using default %d",
+                    max_rec,
+                    MAX_RECALL_RESULTS,
+                )
+        except Exception as e:
+            logger.debug("Failed to load SQLite memory configuration: %s", e)
+            db_path = self._hermes_home / "memory.db"
+            auto_extract = True
+            max_recall = MAX_RECALL_RESULTS
+
+        self._db_path = db_path
+        self._auto_extract = auto_extract
+        self._max_recall = max_recall
 
         self._initialized = False
         self._ensure_db()
@@ -388,6 +436,7 @@ class SQLiteMemoryProvider(MemoryProvider):
     def search_memories(self, query: str, limit: int = 5, category: Optional[str] = None) -> List[Dict[str, Any]]:
         """Search memories using FTS5 with fallback to LIKE search."""
         results: List[Dict[str, Any]] = []
+        rows = []
         fts_query = self._sanitize_fts_query(query)
 
         with self._conn() as conn:
@@ -406,11 +455,10 @@ class SQLiteMemoryProvider(MemoryProvider):
                     sql += " ORDER BY rank LIMIT ?"
                     params.append(limit)
 
-                    for row in conn.execute(sql, params).fetchall():
-                        results.append({"id": row["id"], "category": row["category"], "content": row["content"], "created_at": row["created_at"]})
+                    rows = conn.execute(sql, params).fetchall()
 
                 # Fallback to LIKE search if FTS returned nothing
-                if not results and query.strip():
+                if not rows and query.strip():
                     keywords = [k.strip() for k in query.split() if len(k.strip()) >= 2][:3]
                     if keywords:
                         where = " OR ".join(["m.content LIKE ?" for _ in keywords])
@@ -422,8 +470,17 @@ class SQLiteMemoryProvider(MemoryProvider):
                         sql += " ORDER BY m.updated_at DESC LIMIT ?"
                         params.append(limit)
 
-                        for row in conn.execute(sql, params).fetchall():
-                            results.append({"id": row["id"], "category": row["category"], "content": row["content"], "created_at": row["created_at"]})
+                        rows = conn.execute(sql, params).fetchall()
+
+                results = [
+                    {
+                        "id": row["id"],
+                        "category": row["category"],
+                        "content": row["content"],
+                        "created_at": row["created_at"],
+                    }
+                    for row in rows
+                ]
             except Exception as e:
                 logger.debug("SQLite memory search error: %s", e)
 
