@@ -22,6 +22,7 @@ Includes Web dashboard API definitions as well as a bundled Hermes Desktop GUI (
 sqlite-memory/
 ├── __init__.py          # Plugin entrypoint (MemoryProvider implementation)
 ├── config_schema.py     # Schema definition for UI & settings
+├── memory_schema.py     # Shared memories/FTS schema initialization
 ├── plugin.yaml          # Plugin manifest
 ├── dashboard/           # Web dashboard definition & API
 │   ├── manifest.json
@@ -80,6 +81,8 @@ memory:
 When `db_path` is omitted, memories are stored in `memory.db` under the active profile's Hermes home. An explicit `db_path` overrides this location; profiles configured with the same path share one database.
 
 When `auto_extract` is enabled, only the first non-empty line of a user message is checked, and the entire line must match an explicit English or Japanese memory directive (for example, `Please remember that ...`). Trigger phrases in later lines or pasted examples are ignored. Use `sqlite_remember` for explicit, unambiguous storage.
+
+Search and list result limits, including `max_recall`, are bounded to 1–100.
 
 ### 3. Restart Hermes
 
@@ -146,6 +149,7 @@ Hermes Web ダッシュボード用の API に加え、Hermes Desktop 用の GUI
 sqlite-memory/
 ├── __init__.py          # プラグイン本体 (MemoryProvider 実装)
 ├── config_schema.py     # UI/設定定義スキーマ
+├── memory_schema.py     # Agent / Dashboard 共通のDB・FTSスキーマ初期化
 ├── plugin.yaml          # プラグイン定義マニフェスト
 ├── dashboard/           # Webダッシュボード用定義 & API
 │   ├── manifest.json
@@ -204,6 +208,8 @@ memory:
 `db_path` を省略すると、現在のプロファイルの Hermes home 直下に `memory.db` が作成されます。`db_path` を明示すると保存先が上書きされ、複数プロファイルに同じパスを指定した場合は同じ DB を共有します。
 
 `auto_extract` を有効にしても、各ユーザー発言の先頭の空でない1行だけを検査し、その行全体が英語または日本語の明示的な記憶指示に一致した場合に限り保存します。後続行の引用や貼り付けた例に含まれる語句は抽出されません。確実に保存する場合は `sqlite_remember` を使用してください。
+
+検索・一覧の取得件数は `max_recall` を含め、1〜100件の範囲に制限されます。
 
 ### 3. Hermes の再起動
 

@@ -19,6 +19,11 @@ except ImportError:
     from memory_stats import collect_memory_stats
 
 try:
+    from ..memory_schema import ensure_memory_schema
+except ImportError:
+    from memory_schema import ensure_memory_schema
+
+try:
     from fastapi import APIRouter, HTTPException, Query, status as http_status
     from pydantic import BaseModel, Field
 except ImportError:
@@ -235,57 +240,7 @@ def _ensure_db_schema(conn: sqlite3.Connection, db_path: Optional[Path] = None) 
     if path_key and cache_signature is not None and _INITIALIZED_DBS.get(path_key) == cache_signature:
         return
 
-    fts_check_completed = False
-    with conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS memories (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                category TEXT DEFAULT 'general',
-                content TEXT NOT NULL,
-                source TEXT DEFAULT 'manual',
-                session_id TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-        conn.execute("""
-            CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
-                content, category, content='memories', content_rowid='id'
-            );
-        """)
-        # Agent 側と同一の 3 つの同期トリガーを追加
-        conn.execute("""
-            CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
-                INSERT INTO memories_fts(rowid, content, category)
-                VALUES (new.id, new.content, new.category);
-            END;
-        """)
-        conn.execute("""
-            CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
-                INSERT INTO memories_fts(memories_fts, rowid, content, category)
-                VALUES ('delete', old.id, old.content, old.category);
-            END;
-        """)
-        conn.execute("""
-            CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
-                INSERT INTO memories_fts(memories_fts, rowid, content, category)
-                VALUES ('delete', old.id, old.content, old.category);
-                INSERT INTO memories_fts(rowid, content, category)
-                VALUES (new.id, new.content, new.category);
-            END;
-        """)
-
-        # 既存レコードの FTS 同期チェック＆再構築
-        try:
-            mem_row = conn.execute("SELECT COUNT(*) FROM memories").fetchone()
-            mem_count = mem_row[0] if mem_row else 0
-            doc_row = conn.execute("SELECT COUNT(*) FROM memories_fts_docsize").fetchone()
-            doc_count = doc_row[0] if doc_row else 0
-            if mem_count != doc_count:
-                conn.execute("INSERT INTO memories_fts(memories_fts) VALUES('rebuild');")
-            fts_check_completed = True
-        except Exception as e:
-            logger.debug("Notice during FTS integrity check: %s", e)
+    fts_check_completed = ensure_memory_schema(conn)
 
     if path_key and fts_check_completed:
         cache_signature = _db_schema_cache_signature(conn, Path(path_key))
@@ -411,7 +366,7 @@ async def create_memory(
         raise
     except Exception as e:
         logger.error("Error creating memory: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to create memory") from e
 
 
 @router.put("/memories/{memory_id}")
@@ -444,7 +399,7 @@ async def update_memory(
         raise
     except Exception as e:
         logger.error("Error updating memory: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to update memory") from e
 
 
 @router.delete("/memories/{memory_id}")
@@ -464,4 +419,4 @@ async def delete_memory(
         raise
     except Exception as e:
         logger.error("Error deleting memory: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to delete memory") from e

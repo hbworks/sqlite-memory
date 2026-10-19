@@ -140,6 +140,60 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
         self.assertTrue(provider._auto_extract)
         self.assertEqual(provider._max_recall, sqlite_memory_module.MAX_RECALL_RESULTS)
 
+    def test_initialize_clamps_max_recall_to_supported_range(self):
+        for configured_value, expected in ((-1, 1), (0, 1), (101, 100)):
+            with self.subTest(configured_value=configured_value):
+                config = {
+                    "memory": {
+                        "sqlite-memory": {"max_recall": configured_value}
+                    }
+                }
+                with self._hermes_config_patch(config):
+                    provider = SQLiteMemoryProvider()
+                    provider.initialize(
+                        session_id="bounded-config-test",
+                        hermes_home=str(
+                            Path(self.tmpdir) / f"profile-{configured_value}"
+                        ),
+                    )
+
+                self.assertEqual(provider._max_recall, expected)
+
+    def test_ensure_db_raises_when_initialization_fails(self):
+        import sqlite3
+        from unittest.mock import patch
+
+        provider = SQLiteMemoryProvider()
+        provider._db_path = self.db_path
+        with patch.object(
+            provider, "_get_connection", side_effect=sqlite3.OperationalError("probe failure")
+        ):
+            with self.assertRaises(sqlite3.OperationalError):
+                provider._ensure_db()
+
+        self.assertFalse(provider._initialized)
+
+    def test_shared_schema_initializer_creates_fts_sync_triggers(self):
+        import sqlite3
+        from memory_schema import ensure_memory_schema
+
+        db_file = Path(self.tmpdir) / "shared_schema.db"
+        conn = sqlite3.connect(db_file)
+        try:
+            self.assertTrue(ensure_memory_schema(conn))
+            with conn:
+                conn.execute(
+                    "INSERT INTO memories (category, content) VALUES (?, ?)",
+                    ("test", "shared schema sentinel"),
+                )
+            match = conn.execute(
+                "SELECT rowid FROM memories_fts WHERE memories_fts MATCH 'sentinel'"
+            ).fetchone()
+        finally:
+            conn.close()
+
+        self.assertIsNotNone(match)
+
     def tearDown(self):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
@@ -246,6 +300,64 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
         pref_memories = self.provider.list_memories(category="preference")
         self.assertEqual(len(pref_memories), 1)
         self.assertEqual(pref_memories[0]["content"], "User prefers dark mode UI")
+
+    def test_search_memories_clamps_negative_limit(self):
+        self.provider.add_memory("search limit sentinel one")
+        self.provider.add_memory("search limit sentinel two")
+
+        self.assertEqual(
+            len(self.provider.search_memories("search limit", limit=-1)), 1
+        )
+
+    def test_list_memories_clamps_negative_limit(self):
+        self.provider.add_memory("list limit sentinel one")
+        self.provider.add_memory("list limit sentinel two")
+
+        self.assertEqual(len(self.provider.list_memories(limit=-1)), 1)
+
+    def test_search_memories_caps_large_limit(self):
+        for index in range(101):
+            self.provider.add_memory(f"search cap marker {index}")
+
+        self.assertEqual(
+            len(self.provider.search_memories("search cap marker", limit=10_000)),
+            100,
+        )
+
+    def test_search_tool_reports_database_failure(self):
+        import json
+
+        self.provider.add_memory("search failure sentinel")
+        with self.provider._conn() as conn:
+            conn.execute("DROP TABLE memories")
+
+        with self.assertLogs(sqlite_memory_module.logger, level="WARNING") as logs:
+            result = json.loads(
+                self.provider.handle_tool_call(
+                    "sqlite_search", {"query": "search failure"}
+                )
+            )
+
+        self.assertEqual(result, {"error": "SQLite memory search failed"})
+        self.assertTrue(any("SQLite memory search failed" in line for line in logs.output))
+
+    def test_prefetch_search_failure_resets_recall_status(self):
+        import sqlite3
+
+        self.provider._last_recall_count = 4
+        with self.provider._conn() as conn:
+            conn.execute("DROP TABLE memories")
+
+        with self.assertLogs(sqlite_memory_module.logger, level="WARNING"):
+            with self.assertRaises(sqlite3.OperationalError):
+                self.provider.prefetch("search failure")
+
+        self.assertIsNone(self.provider.recall_status())
+
+    def test_prefetch_without_matches_has_no_recall_status(self):
+        self.assertEqual(self.provider.prefetch("no matching memory"), "")
+
+        self.assertIsNone(self.provider.recall_status())
 
     def test_fts5_search(self):
         """Should perform full-text search via FTS5 and return ranked results."""
@@ -484,6 +596,76 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
         # List
         res_list = self.provider.handle_tool_call("sqlite_list_memories", {"category": "config"})
         self.assertIn("port 8080", res_list)
+
+    def test_tool_rejects_non_string_remember_content(self):
+        import json
+
+        result = json.loads(
+            self.provider.handle_tool_call("sqlite_remember", {"content": None})
+        )
+
+        self.assertEqual(result, {"error": "content must be a string"})
+
+    def test_tool_rejects_non_string_search_query(self):
+        import json
+
+        result = json.loads(
+            self.provider.handle_tool_call("sqlite_search", {"query": None})
+        )
+
+        self.assertEqual(result, {"error": "query must be a string"})
+
+    def test_tool_rejects_non_integer_limit(self):
+        import json
+
+        result = json.loads(
+            self.provider.handle_tool_call(
+                "sqlite_search", {"query": "a valid query", "limit": "all"}
+            )
+        )
+
+        self.assertEqual(result, {"error": "limit must be an integer"})
+
+    def test_tool_rejects_non_integer_memory_id(self):
+        import json
+
+        result = json.loads(
+            self.provider.handle_tool_call(
+                "sqlite_forget", {"memory_id": "not-an-id"}
+            )
+        )
+
+        self.assertEqual(result, {"error": "memory_id must be an integer"})
+
+    def test_tool_distinguishes_missing_and_non_positive_memory_ids(self):
+        import json
+
+        missing = json.loads(
+            self.provider.handle_tool_call("sqlite_forget", {})
+        )
+        self.assertEqual(missing, {"error": "memory_id is required"})
+
+        for value in (0, -1):
+            with self.subTest(memory_id=value):
+                result = json.loads(
+                    self.provider.handle_tool_call(
+                        "sqlite_forget", {"memory_id": value}
+                    )
+                )
+                self.assertEqual(
+                    result, {"error": "memory_id must be a positive integer"}
+                )
+
+    def test_tool_rejects_non_string_category(self):
+        import json
+
+        for tool_name, args in (
+            ("sqlite_remember", {"content": "valid content", "category": 123}),
+            ("sqlite_list_memories", {"category": 123}),
+        ):
+            with self.subTest(tool=tool_name):
+                result = json.loads(self.provider.handle_tool_call(tool_name, args))
+                self.assertEqual(result, {"error": "category must be a string"})
 
     def test_sqlite_stats_tool_returns_metrics(self):
         import json
@@ -955,6 +1137,38 @@ memory:
         self.assertIsInstance(populated["wal_size_bytes"], int)
         for key in ("db_path", "profile", "available_profiles"):
             self.assertIn(key, populated)
+
+    def test_memory_mutation_failures_do_not_expose_database_errors(self):
+        import asyncio
+        import sqlite3
+        from unittest.mock import patch
+        from dashboard.plugin_api import (
+            HTTPException,
+            MemoryCreateRequest,
+            MemoryUpdateRequest,
+            create_memory,
+            delete_memory,
+            update_memory,
+        )
+
+        internal_error = "/private/profile/memory.db: locked"
+        cases = (
+            ("create", lambda: create_memory(MemoryCreateRequest(content="sentinel")), "Failed to create memory"),
+            ("update", lambda: update_memory(1, MemoryUpdateRequest(content="updated")), "Failed to update memory"),
+            ("delete", lambda: delete_memory(1), "Failed to delete memory"),
+        )
+        for name, invoke, expected_detail in cases:
+            with self.subTest(operation=name):
+                with patch(
+                    "dashboard.plugin_api._db_conn",
+                    side_effect=sqlite3.OperationalError(internal_error),
+                ):
+                    with self.assertRaises(HTTPException) as ctx:
+                        asyncio.run(invoke())
+
+                self.assertEqual(ctx.exception.status_code, 500)
+                self.assertEqual(ctx.exception.detail, expected_detail)
+                self.assertNotIn(internal_error, ctx.exception.detail)
 
     def test_stats_endpoint_returns_500_when_database_read_fails(self):
         import asyncio

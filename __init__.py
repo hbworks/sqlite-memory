@@ -23,6 +23,11 @@ except ImportError:
     from memory_stats import collect_memory_stats
 
 try:
+    from .memory_schema import ensure_memory_schema
+except ImportError:
+    from memory_schema import ensure_memory_schema
+
+try:
     from agent.memory_provider import MemoryProvider, RecallStatus
 except ImportError:
     class MemoryProvider:  # type: ignore
@@ -38,6 +43,7 @@ logger = logging.getLogger(__name__)
 
 MIN_QUERY_LEN = 2
 MAX_RECALL_RESULTS = 5
+MAX_MEMORY_RESULTS = 100
 INDICATOR_GLYPH = "💾"
 
 # --- Tool Schemas ---
@@ -70,7 +76,7 @@ SEARCH_SCHEMA = {
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "Search keywords or phrase."},
-                "limit": {"type": "integer", "description": "Maximum number of results (default 5).", "default": 5},
+                "limit": {"type": "integer", "description": "Maximum number of results (default 5, bounded to 1–100).", "default": 5},
             },
             "required": ["query"],
         },
@@ -99,7 +105,7 @@ LIST_SCHEMA = {
             "type": "object",
             "properties": {
                 "category": {"type": "string", "description": "Optional category filter."},
-                "limit": {"type": "integer", "description": "Maximum number of memories (default 10).", "default": 10},
+                "limit": {"type": "integer", "description": "Maximum number of memories (default 10, bounded to 1–100).", "default": 10},
             },
         },
     },
@@ -194,6 +200,19 @@ def _normalize_memory_content(content: str) -> str:
     return " ".join(normalized.split())
 
 
+def _bounded_limit(value: Any, default: int) -> int:
+    """Normalize a result limit and prevent SQLite's negative-LIMIT behavior."""
+    if value is None:
+        value = default
+    if isinstance(value, bool):
+        raise ValueError("limit must be an integer")
+    try:
+        limit = int(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("limit must be an integer") from exc
+    return max(1, min(limit, MAX_MEMORY_RESULTS))
+
+
 def _get_hermes_backup_root(hermes_home: Path) -> Path:
     """Resolve the root covered by Hermes backup for a profile-scoped home."""
     resolved_home = hermes_home.expanduser().resolve()
@@ -256,7 +275,7 @@ class SQLiteMemoryProvider(MemoryProvider):
                 },
                 {
                     "key": "max_recall",
-                    "description": "Max prefetch memories",
+                    "description": "Max prefetch memories (bounded to 1–100)",
                     "default": "5",
                     "secret": False,
                 },
@@ -277,59 +296,18 @@ class SQLiteMemoryProvider(MemoryProvider):
         with self._lock:
             if self._initialized:
                 return
+            conn = None
             try:
                 self._db_path.parent.mkdir(parents=True, exist_ok=True)
                 conn = self._get_connection()
-                with conn:
-                    conn.execute("""
-                        CREATE TABLE IF NOT EXISTS memories (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            category TEXT DEFAULT 'general',
-                            content TEXT NOT NULL,
-                            source TEXT DEFAULT 'manual',
-                            session_id TEXT,
-                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                        );
-                    """)
-                    conn.execute("""
-                        CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
-                            content, category, content='memories', content_rowid='id'
-                        );
-                    """)
-                    conn.execute("""
-                        CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
-                            INSERT INTO memories_fts(rowid, content, category)
-                            VALUES (new.id, new.content, new.category);
-                        END;
-                    """)
-                    conn.execute("""
-                        CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
-                            INSERT INTO memories_fts(memories_fts, rowid, content, category)
-                            VALUES ('delete', old.id, old.content, old.category);
-                        END;
-                    """)
-                    conn.execute("""
-                        CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
-                            INSERT INTO memories_fts(memories_fts, rowid, content, category)
-                            VALUES ('delete', old.id, old.content, old.category);
-                            INSERT INTO memories_fts(rowid, content, category)
-                            VALUES (new.id, new.content, new.category);
-                        END;
-                    """)
-                    try:
-                        mem_row = conn.execute("SELECT COUNT(*) FROM memories").fetchone()
-                        mem_count = mem_row[0] if mem_row else 0
-                        doc_row = conn.execute("SELECT COUNT(*) FROM memories_fts_docsize").fetchone()
-                        doc_count = doc_row[0] if doc_row else 0
-                        if mem_count != doc_count:
-                            conn.execute("INSERT INTO memories_fts(memories_fts) VALUES('rebuild');")
-                    except Exception as rebuild_err:
-                        logger.debug("Notice during FTS integrity check: %s", rebuild_err)
-                conn.close()
+                ensure_memory_schema(conn)
                 self._initialized = True
             except Exception as e:
                 logger.error("Failed to initialize SQLite memory tables: %s", e)
+                raise
+            finally:
+                if conn is not None:
+                    conn.close()
 
     @contextmanager
     def _conn(self) -> Generator[sqlite3.Connection, None, None]:
@@ -369,13 +347,14 @@ class SQLiteMemoryProvider(MemoryProvider):
                 config, cfg_get, "max_recall", default=MAX_RECALL_RESULTS
             )
             try:
-                max_recall = int(max_rec)
-            except (TypeError, ValueError, OverflowError):
+                max_recall = _bounded_limit(max_rec, default=MAX_RECALL_RESULTS)
+            except ValueError:
                 logger.warning(
                     "Invalid SQLite memory max_recall %r; using default %d",
                     max_rec,
                     MAX_RECALL_RESULTS,
                 )
+                max_recall = MAX_RECALL_RESULTS
         except Exception as e:
             logger.debug("Failed to load SQLite memory configuration: %s", e)
             db_path = self._hermes_home / "memory.db"
@@ -401,6 +380,8 @@ class SQLiteMemoryProvider(MemoryProvider):
         )
 
     def recall_status(self) -> Optional[RecallStatus]:
+        if self._last_recall_count <= 0:
+            return None
         return RecallStatus(
             provider_label="SQLite Memory",
             count=self._last_recall_count,
@@ -414,54 +395,52 @@ class SQLiteMemoryProvider(MemoryProvider):
 
     def search_memories(self, query: str, limit: int = 5, category: Optional[str] = None) -> List[Dict[str, Any]]:
         """Search memories using FTS5 with fallback to LIKE search."""
+        limit = _bounded_limit(limit, default=5)
         results: List[Dict[str, Any]] = []
         rows = []
         fts_query = self._sanitize_fts_query(query)
 
         with self._conn() as conn:
-            try:
-                if fts_query:
-                    sql = """
-                        SELECT m.id, m.category, m.content, m.created_at, bm25(memories_fts) as rank
-                        FROM memories_fts f
-                        JOIN memories m ON m.id = f.rowid
-                        WHERE memories_fts MATCH ?
-                    """
-                    params: List[Any] = [fts_query]
+            if fts_query:
+                sql = """
+                    SELECT m.id, m.category, m.content, m.created_at, bm25(memories_fts) as rank
+                    FROM memories_fts f
+                    JOIN memories m ON m.id = f.rowid
+                    WHERE memories_fts MATCH ?
+                """
+                params: List[Any] = [fts_query]
+                if category:
+                    sql += " AND m.category = ?"
+                    params.append(category)
+                sql += " ORDER BY rank LIMIT ?"
+                params.append(limit)
+
+                rows = conn.execute(sql, params).fetchall()
+
+            # Fallback to LIKE search if FTS returned nothing
+            if not rows and query.strip():
+                keywords = [k.strip() for k in query.split() if len(k.strip()) >= 2][:3]
+                if keywords:
+                    where = " OR ".join(["m.content LIKE ?" for _ in keywords])
+                    sql = f"SELECT id, category, content, created_at FROM memories m WHERE ({where})"
+                    params = [f"%{k}%" for k in keywords]
                     if category:
                         sql += " AND m.category = ?"
                         params.append(category)
-                    sql += " ORDER BY rank LIMIT ?"
+                    sql += " ORDER BY m.updated_at DESC LIMIT ?"
                     params.append(limit)
 
                     rows = conn.execute(sql, params).fetchall()
 
-                # Fallback to LIKE search if FTS returned nothing
-                if not rows and query.strip():
-                    keywords = [k.strip() for k in query.split() if len(k.strip()) >= 2][:3]
-                    if keywords:
-                        where = " OR ".join(["m.content LIKE ?" for _ in keywords])
-                        sql = f"SELECT id, category, content, created_at FROM memories m WHERE ({where})"
-                        params = [f"%{k}%" for k in keywords]
-                        if category:
-                            sql += " AND m.category = ?"
-                            params.append(category)
-                        sql += " ORDER BY m.updated_at DESC LIMIT ?"
-                        params.append(limit)
-
-                        rows = conn.execute(sql, params).fetchall()
-
-                results = [
-                    {
-                        "id": row["id"],
-                        "category": row["category"],
-                        "content": row["content"],
-                        "created_at": row["created_at"],
-                    }
-                    for row in rows
-                ]
-            except Exception as e:
-                logger.debug("SQLite memory search error: %s", e)
+            results = [
+                {
+                    "id": row["id"],
+                    "category": row["category"],
+                    "content": row["content"],
+                    "created_at": row["created_at"],
+                }
+                for row in rows
+            ]
 
         return results
 
@@ -470,7 +449,12 @@ class SQLiteMemoryProvider(MemoryProvider):
             self._last_recall_count = 0
             return ""
 
-        memories = self.search_memories(query, limit=self._max_recall)
+        self._last_recall_count = 0
+        try:
+            memories = self.search_memories(query, limit=self._max_recall)
+        except sqlite3.Error as e:
+            logger.warning("SQLite memory search failed: %s", e)
+            raise
         self._last_recall_count = len(memories)
         if not memories:
             return ""
@@ -496,6 +480,7 @@ class SQLiteMemoryProvider(MemoryProvider):
                 return conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,)).rowcount > 0
 
     def list_memories(self, category: Optional[str] = None, limit: int = 10) -> List[Dict[str, Any]]:
+        limit = _bounded_limit(limit, default=10)
         with self._conn() as conn:
             sql = "SELECT id, category, content, created_at FROM memories"
             params: List[Any] = []
@@ -641,37 +626,67 @@ class SQLiteMemoryProvider(MemoryProvider):
 
     def handle_tool_call(self, tool_name: str, args: dict, **kwargs) -> str:
         try:
+            if not isinstance(args, dict):
+                return json.dumps({"error": "arguments must be an object"})
+
             if tool_name == "sqlite_remember":
-                content = args.get("content", "").strip()
+                content = args.get("content", "")
+                if not isinstance(content, str):
+                    return json.dumps({"error": "content must be a string"})
+                content = content.strip()
                 if not content:
                     return json.dumps({"error": "content is required"})
-                mem_id = self.add_memory(content=content, category=args.get("category", "general"), source="tool")
+                category = args.get("category", "general")
+                if not isinstance(category, str):
+                    return json.dumps({"error": "category must be a string"})
+                mem_id = self.add_memory(content=content, category=category, source="tool")
                 return json.dumps({"status": "success", "memory_id": mem_id, "message": "Fact stored in SQLite memory."})
 
             if tool_name == "sqlite_search":
-                query = args.get("query", "").strip()
+                query = args.get("query", "")
+                if not isinstance(query, str):
+                    return json.dumps({"error": "query must be a string"})
+                query = query.strip()
                 if not query:
                     return json.dumps({"error": "query is required"})
-                results = self.search_memories(query=query, limit=int(args.get("limit", 5)))
+                try:
+                    results = self.search_memories(query=query, limit=args.get("limit", 5))
+                except sqlite3.Error as e:
+                    logger.warning("SQLite memory search failed: %s", e)
+                    return json.dumps({"error": "SQLite memory search failed"})
                 return json.dumps({"status": "success", "count": len(results), "results": results})
 
             if tool_name == "sqlite_forget":
-                mem_id = int(args.get("memory_id", 0))
-                if not mem_id:
+                if "memory_id" not in args:
                     return json.dumps({"error": "memory_id is required"})
+                raw_memory_id = args["memory_id"]
+                if isinstance(raw_memory_id, bool):
+                    return json.dumps({"error": "memory_id must be an integer"})
+                try:
+                    mem_id = int(raw_memory_id)
+                except (TypeError, ValueError, OverflowError):
+                    return json.dumps({"error": "memory_id must be an integer"})
+                if mem_id <= 0:
+                    return json.dumps({"error": "memory_id must be a positive integer"})
                 deleted = self.delete_memory(mem_id)
                 return json.dumps({"status": "success" if deleted else "not_found", "message": f"Memory ID {mem_id} {'deleted' if deleted else 'not found'}."})
 
             if tool_name == "sqlite_list_memories":
-                memories = self.list_memories(category=args.get("category"), limit=int(args.get("limit", 10)))
+                category = args.get("category")
+                if category is not None and not isinstance(category, str):
+                    return json.dumps({"error": "category must be a string"})
+                memories = self.list_memories(category=category, limit=args.get("limit", 10))
                 return json.dumps({"status": "success", "count": len(memories), "memories": memories})
 
             if tool_name == "sqlite_stats":
                 return json.dumps({"status": "success", **self.get_stats()})
 
             return json.dumps({"error": f"Unknown tool: {tool_name}"})
-        except Exception as e:
+        except ValueError as e:
             return json.dumps({"error": str(e)})
+        except Exception as e:
+            logger.warning("SQLite memory tool %s failed: %s", tool_name, e)
+            return json.dumps({"error": "SQLite memory operation failed"})
 
     def shutdown(self) -> None:
         pass
