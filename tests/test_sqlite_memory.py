@@ -151,53 +151,6 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
         self.assertEqual(fields_by_key["auto_extract"]["choices"], ["true", "false"])
         self.assertFalse(fields_by_key["auto_extract"]["secret"])
 
-    def test_declared_config_schema_loads_by_path_without_plugin_on_sys_path(self):
-        import importlib.util
-        import types
-        from types import SimpleNamespace
-        from unittest.mock import patch
-
-        plugins_module = types.ModuleType("plugins")
-        plugins_module.__path__ = []
-        memory_module = types.ModuleType("plugins.memory")
-        memory_module.__path__ = []
-        schema_api = types.ModuleType("plugins.memory.config_schema")
-        schema_api.KIND_BOOL = "bool"
-        schema_api.KIND_NUMBER = "number"
-        schema_api.KIND_TEXT = "text"
-        schema_api.ProviderField = lambda **values: SimpleNamespace(**values)
-        schema_api.ProviderConfigSchema = lambda **values: SimpleNamespace(**values)
-        spec = importlib.util.spec_from_file_location(
-            "_hermes_memory_config_schema.sqlite-memory",
-            plugin_dir / "config_schema.py",
-        )
-        self.assertIsNotNone(spec)
-        self.assertIsNotNone(spec.loader)
-        module = importlib.util.module_from_spec(spec)
-        isolated_path = [
-            entry
-            for entry in sys.path
-            if Path(entry or ".").resolve() != plugin_dir.resolve()
-        ]
-
-        with patch.dict(
-            sys.modules,
-            {
-                "plugins": plugins_module,
-                "plugins.memory": memory_module,
-                "plugins.memory.config_schema": schema_api,
-                "config_fields": None,
-            },
-        ):
-            with patch.object(sys, "path", isolated_path):
-                spec.loader.exec_module(module)
-
-        fields = module.CONFIG_SCHEMA.fields
-        self.assertEqual(
-            [field.key for field in fields], ["db_path", "auto_extract", "max_recall"]
-        )
-        self.assertEqual(fields[1].kind, "bool")
-
     def test_config_schema_matches_memory_setup_contract(self):
         """Memory setup expects a list of field dictionaries, not the UI schema object."""
         from types import SimpleNamespace

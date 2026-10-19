@@ -19,11 +19,6 @@ except ImportError:
     from memory_stats import collect_memory_stats
 
 try:
-    from ..config_fields import CONFIG_SECTION_KEYS
-except ImportError:
-    from config_fields import CONFIG_SECTION_KEYS
-
-try:
     from fastapi import APIRouter, HTTPException, Query, status as http_status
     from pydantic import BaseModel, Field
 except ImportError:
@@ -144,7 +139,7 @@ def _read_config_db_path(config_file: Path) -> Optional[Path]:
                 data = yaml.safe_load(f) or {}
             memory_cfg = data.get("memory")
             if isinstance(memory_cfg, dict):
-                for config_key in CONFIG_SECTION_KEYS:
+                for config_key in ("sqlite-memory", "sqlite_memory"):
                     cfg_obj = memory_cfg.get(config_key)
                     if not isinstance(cfg_obj, dict):
                         continue
@@ -154,14 +149,9 @@ def _read_config_db_path(config_file: Path) -> Optional[Path]:
         except ImportError:
             content = config_file.read_text(encoding="utf-8")
             db_path_pattern = r"db_path:\s*([^\r\n#]+)"
-            match = None
-            for config_key in CONFIG_SECTION_KEYS:
-                match = re.search(
-                    re.escape(config_key) + r"[\s\S]*?" + db_path_pattern,
-                    content,
-                )
-                if match is not None:
-                    break
+            match = re.search(r"sqlite-memory[\s\S]*?" + db_path_pattern, content)
+            if match is None:
+                match = re.search(r"sqlite_memory[\s\S]*?" + db_path_pattern, content)
             if match:
                 val = match.group(1).strip().strip('"\'')
                 if val:

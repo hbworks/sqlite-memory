@@ -23,11 +23,6 @@ except ImportError:
     from memory_stats import collect_memory_stats
 
 try:
-    from .config_fields import CONFIG_FIELD_DEFINITIONS, CONFIG_SECTION_KEYS
-except ImportError:
-    from config_fields import CONFIG_FIELD_DEFINITIONS, CONFIG_SECTION_KEYS
-
-try:
     from agent.memory_provider import MemoryProvider, RecallStatus
 except ImportError:
     class MemoryProvider:  # type: ignore
@@ -166,53 +161,31 @@ def _get_memory_config_value(
     skip_empty: bool = False,
 ) -> Any:
     """Read a provider setting, preferring the canonical key spelling."""
-    for section in CONFIG_SECTION_KEYS:
+    for section in ("sqlite-memory", "sqlite_memory"):
         value = cfg_get(config, "memory", section, key, default=None)
         if value is not None and not (skip_empty and not value):
             return value
     return default
 
 
-def _setup_field_dict(
-    key: str,
-    label: str,
-    description: Optional[str],
-    default: Any,
-    secret: bool,
-    kind: str,
-    env_key: Optional[str] = None,
-    options=(),
-) -> Dict[str, Any]:
-    item = {
-        "key": key,
-        "description": description or label,
-        "default": default,
-        "secret": secret,
-    }
-    if env_key:
-        item["env_var"] = env_key
-    if kind == "bool":
-        item["choices"] = ["true", "false"]
-    elif kind == "select":
-        item["choices"] = [option.value for option in options]
-    return item
-
-
 def _setup_schema_fields(schema) -> List[Dict[str, Any]]:
     """Adapt the UI config schema to the field-dictionary contract used by memory setup."""
-    return [
-        _setup_field_dict(
-            key=field.key,
-            label=field.label,
-            description=field.description,
-            default=field.default,
-            secret=field.is_secret,
-            kind=field.kind,
-            env_key=field.env_key,
-            options=getattr(field, "options", ()),
-        )
-        for field in schema.fields
-    ]
+    fields = []
+    for field in schema.fields:
+        item = {
+            "key": field.key,
+            "description": field.description or field.label,
+            "default": field.default,
+            "secret": field.is_secret,
+        }
+        if field.env_key:
+            item["env_var"] = field.env_key
+        if field.kind == "bool":
+            item["choices"] = ["true", "false"]
+        elif field.kind == "select":
+            item["choices"] = [option.value for option in field.options]
+        fields.append(item)
+    return fields
 
 
 def _normalize_memory_content(content: str) -> str:
@@ -268,19 +241,25 @@ class SQLiteMemoryProvider(MemoryProvider):
             return _setup_schema_fields(CONFIG_SCHEMA)
         except ImportError:
             return [
-                _setup_field_dict(
-                    key=field.key,
-                    label=field.label,
-                    description=field.description,
-                    default=(
-                        str(self._db_path)
-                        if field.key == "db_path"
-                        else field.default
-                    ),
-                    secret=False,
-                    kind=field.kind,
-                )
-                for field in CONFIG_FIELD_DEFINITIONS
+                {
+                    "key": "db_path",
+                    "description": "Path to SQLite database",
+                    "default": str(self._db_path),
+                    "secret": False,
+                },
+                {
+                    "key": "auto_extract",
+                    "description": "Auto extract rules/preferences",
+                    "default": "true",
+                    "secret": False,
+                    "choices": ["true", "false"],
+                },
+                {
+                    "key": "max_recall",
+                    "description": "Max prefetch memories",
+                    "default": "5",
+                    "secret": False,
+                },
             ]
 
     def _get_connection(self) -> sqlite3.Connection:
