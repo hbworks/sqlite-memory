@@ -1175,6 +1175,31 @@ memory:
         for key in ("db_path", "profile", "available_profiles"):
             self.assertIn(key, populated)
 
+    def test_stats_endpoint_reports_version_from_loaded_plugin_manifest(self):
+        import asyncio
+        from contextlib import nullcontext
+        from unittest.mock import patch
+        from dashboard import plugin_api
+
+        package_root = Path(self.tmpdir) / "profile_plugin"
+        dashboard_dir = package_root / "dashboard"
+        dashboard_dir.mkdir(parents=True)
+        plugin_api_file = dashboard_dir / "plugin_api.py"
+        plugin_api_file.write_text("", encoding="utf-8")
+        (package_root / "plugin.yaml").write_text(
+            "name: sqlite-memory\nversion: 9.8.7\n",
+            encoding="utf-8",
+        )
+
+        with patch.object(plugin_api, "__file__", str(plugin_api_file)), \
+                patch.object(plugin_api, "_get_db_path", return_value=package_root / "memory.db"), \
+                patch.object(plugin_api, "_db_conn", return_value=nullcontext(object())), \
+                patch.object(plugin_api, "collect_memory_stats", return_value={"total_memories": 0}), \
+                patch.object(plugin_api, "_get_available_profiles", return_value=["default"]):
+            stats = asyncio.run(plugin_api.get_stats(profile="default"))
+
+        self.assertEqual(stats.get("plugin_version"), "9.8.7")
+
     def test_memory_mutation_failures_do_not_expose_database_errors(self):
         import asyncio
         import sqlite3

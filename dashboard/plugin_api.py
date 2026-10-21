@@ -70,6 +70,19 @@ except ImportError:
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+
+def _get_plugin_version() -> Optional[str]:
+    """Read the version from the manifest beside this profile's plugin API."""
+    manifest_path = Path(__file__).resolve().parent.parent / "plugin.yaml"
+    try:
+        manifest = manifest_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return None
+
+    match = re.search(r"(?m)^version:\s*['\"]?([^'\"\s#]+)", manifest)
+    return match.group(1) if match else None
+
+
 # 厳格なプロファイル名バリデーション用（英数字、ハイフン、アンダースコアのみ許可）
 _PROFILE_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 _ROOT_PROFILE_ALIASES = frozenset(("default", "main", "root", "~/.hermes"))
@@ -299,6 +312,7 @@ async def get_stats(profile: Optional[str] = Query(None, description="Profile na
                 "db_path": str(db_path),
                 "profile": profile or "default",
                 "available_profiles": _get_available_profiles(),
+                "plugin_version": _get_plugin_version(),
             }
     except HTTPException:
         raise

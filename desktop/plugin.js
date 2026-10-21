@@ -20,6 +20,8 @@ import { jsx, jsxs } from 'react/jsx-runtime'
 // =============================================================================
 
 let _rest = null
+// Keep this package version aligned with plugin.yaml and dashboard/manifest.json.
+const DESKTOP_PLUGIN_VERSION = '1.0.0'
 
 const getLocale = () => {
   if (typeof document !== 'undefined') {
@@ -31,6 +33,10 @@ const getLocale = () => {
     if (langs.some((l) => l && l.toLowerCase().startsWith('ja'))) return 'ja'
   }
   return 'en'
+}
+
+function isPluginVersionCompatible(profileVersion) {
+  return typeof profileVersion === 'string' && profileVersion === DESKTOP_PLUGIN_VERSION
 }
 
 /**
@@ -118,6 +124,12 @@ const t = {
   totalCount: (total) => getLocale() === 'ja' ? `合計: ${total} 件` : `Total: ${total}`,
   get refresh() { return getLocale() === 'ja' ? '更新' : 'Refresh' },
   get loading() { return getLocale() === 'ja' ? '読み込み中...' : 'Loading...' },
+  get versionChecking() { return getLocale() === 'ja' ? 'バージョンを確認中...' : 'Checking plugin version...' },
+  get versionUnavailable() { return getLocale() === 'ja' ? 'バージョンを確認できませんでした' : 'Could not verify plugin version' },
+  get unknownVersion() { return getLocale() === 'ja' ? '不明' : 'unknown' },
+  versionMismatch: (desktopVersion, profileVersion) => getLocale() === 'ja'
+    ? `バージョンが違います（Desktop プラグイン: ${desktopVersion}、プロファイル: ${profileVersion}）`
+    : `Plugin version mismatch (Desktop plugin: ${desktopVersion}, profile: ${profileVersion})`,
   get noMatches() { return getLocale() === 'ja' ? '一致なし' : 'No matches found' },
   get noMemories() { return getLocale() === 'ja' ? '記憶がありません' : 'No memories found' },
   get tryOtherKeyword() { return getLocale() === 'ja' ? '別のキーワードをお試しください' : 'Try a different keyword' },
@@ -301,6 +313,8 @@ function useMemoryState() {
   const [total, setTotal] = useState(0)
   const [categories, setCategories] = useState({})
   const [dbPath, setDbPath] = useState('')
+  const [pluginVersion, setPluginVersion] = useState(null)
+  const [versionStatus, setVersionStatus] = useState('checking')
   const [showAddModal, setShowAddModal] = useState(false)
   const [editId, setEditId] = useState(null)
   const [formCategory, setFormCategory] = useState('preference')
@@ -310,6 +324,7 @@ function useMemoryState() {
   const [mobileDetailOpen, setMobileDetailOpen] = useState(false)
 
   const containerRef = useRef(null)
+  const profileLoadRef = useRef(0)
   const isManuallySelected = useRef(false)
   const prevHostProfileRef = useRef(hostProfileName)
 
@@ -342,22 +357,25 @@ function useMemoryState() {
   }, [])
 
   // 統計情報の取得
-  const loadStats = useCallback(async () => {
+  const loadStats = useCallback(async (requestId) => {
     try {
       const data = await api(`/stats?profile=${encodeURIComponent(selectedProfile)}`)
+      if (requestId !== profileLoadRef.current) return null
       setTotal(data.total_memories || 0)
       setCategories(data.categories || {})
       setDbPath(data.db_path || '')
       if (Array.isArray(data.available_profiles) && data.available_profiles.length > 0) {
         setAvailableProfiles(data.available_profiles)
       }
+      return data
     } catch (e) {
       console.warn('Error loading memory stats:', e)
+      return null
     }
   }, [selectedProfile])
 
   // メモリ一覧の取得
-  const loadMemories = useCallback(async () => {
+  const loadMemories = useCallback(async (requestId) => {
     setLoading(true)
     try {
       const params = new URLSearchParams({ profile: selectedProfile, limit: '100', offset: '0' })
@@ -365,20 +383,49 @@ function useMemoryState() {
       if (selectedCategory && selectedCategory !== 'all') params.append('category', selectedCategory)
 
       const data = await api(`/memories?${params.toString()}`)
+      if (requestId !== profileLoadRef.current) return
       const loaded = data.items || []
       setItems(loaded)
       setSelectedId((prev) => (prev && loaded.some((i) => i.id === prev) ? prev : (loaded[0]?.id ?? null)))
     } catch (e) {
       console.error('Error loading memories:', e)
     } finally {
-      setLoading(false)
+      if (requestId === profileLoadRef.current) setLoading(false)
     }
   }, [selectedProfile, query, selectedCategory])
 
-  useEffect(() => {
-    loadStats()
-    loadMemories()
+  const loadCurrentProfile = useCallback(async () => {
+    const requestId = ++profileLoadRef.current
+    setLoading(true)
+    setPluginVersion(null)
+    setVersionStatus('checking')
+    const stats = await loadStats(requestId)
+    if (requestId !== profileLoadRef.current) return
+    if (!stats) {
+      setVersionStatus('unavailable')
+      setItems([])
+      setSelectedId(null)
+      setLoading(false)
+      return
+    }
+
+    const profileVersion = typeof stats.plugin_version === 'string' ? stats.plugin_version : null
+    setPluginVersion(profileVersion)
+    if (isPluginVersionCompatible(profileVersion)) {
+      setVersionStatus('compatible')
+      await loadMemories(requestId)
+      return
+    }
+
+    setVersionStatus('mismatch')
+    setItems([])
+    setSelectedId(null)
+    setLoading(false)
   }, [loadStats, loadMemories])
+
+  useEffect(() => {
+    loadCurrentProfile()
+  }, [loadCurrentProfile])
 
   const activeMemory = useMemo(() => items.find((i) => i.id === selectedId) || null, [items, selectedId])
 
@@ -402,7 +449,7 @@ function useMemoryState() {
       setShowAddModal(false)
       setEditId(null)
       setFormContent('')
-      await Promise.all([loadStats(), loadMemories()])
+      await loadCurrentProfile()
     } catch (err) {
       console.error('Error saving memory:', err)
       alert(t.saveError(err.message))
@@ -418,7 +465,7 @@ function useMemoryState() {
       await api(`/memories/${id}?profile=${encodeURIComponent(selectedProfile)}`, { method: 'DELETE' })
       if (selectedId === id) setSelectedId(null)
       if (isCompact) setMobileDetailOpen(false)
-      await Promise.all([loadStats(), loadMemories()])
+      await loadCurrentProfile()
     } catch (err) {
       console.error('Error deleting memory:', err)
       alert(t.deleteError(err.message))
@@ -435,10 +482,7 @@ function useMemoryState() {
 
   const handleCloseModal = () => setShowAddModal(false)
 
-  const reloadAll = () => {
-    loadStats()
-    loadMemories()
-  }
+  const reloadAll = () => loadCurrentProfile()
 
   const categoryPills = [
     { key: 'all', label: t.all, count: total },
@@ -462,6 +506,8 @@ function useMemoryState() {
     activeMemory,
     total,
     dbPath,
+    pluginVersion,
+    versionStatus,
     showAddModal,
     editId,
     formCategory,
@@ -873,6 +919,23 @@ function MemoryEditModal({
  */
 function MemoryManagementPage() {
   const state = useMemoryState()
+
+  if (state.versionStatus !== 'compatible') {
+    const message = state.versionStatus === 'checking'
+      ? t.versionChecking
+      : state.versionStatus === 'mismatch'
+        ? t.versionMismatch(DESKTOP_PLUGIN_VERSION, state.pluginVersion || t.unknownVersion)
+        : t.versionUnavailable
+
+    return jsx('div', {
+      ref: state.containerRef,
+      style: { ...S.page, alignItems: 'center', justifyContent: 'center', padding: '24px', textAlign: 'center' },
+      children: jsx('div', {
+        style: { fontSize: '13px', color: 'var(--foreground, #111827)' },
+        children: message
+      })
+    })
+  }
 
   return jsxs('div', {
     ref: state.containerRef,
