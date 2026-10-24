@@ -205,6 +205,9 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
         self.assertEqual(fields_by_key["db_path"]["default"], "")
         self.assertEqual(fields_by_key["auto_extract"]["choices"], ["true", "false"])
         self.assertFalse(fields_by_key["auto_extract"]["secret"])
+        self.assertEqual(fields_by_key["max_recall"]["minimum"], 5)
+        self.assertEqual(fields_by_key["max_recall"]["maximum"], 100)
+        self.assertEqual(fields_by_key["max_recall"]["step"], 1)
 
     def test_declared_config_schema_leaves_database_path_blank(self):
         import importlib.util
@@ -241,6 +244,10 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
         fields_by_key = {field.key: field for field in module.CONFIG_SCHEMA.fields}
         self.assertEqual(fields_by_key["db_path"].default, "")
         self.assertIn("leave blank", fields_by_key["db_path"].description.lower())
+        self.assertEqual(fields_by_key["max_recall"].minimum, 5)
+        self.assertEqual(fields_by_key["max_recall"].maximum, 100)
+        self.assertEqual(fields_by_key["max_recall"].step, 1)
+        self.assertIn("5–100", fields_by_key["max_recall"].description)
 
     def test_config_schema_matches_memory_setup_contract(self):
         """Memory setup expects a list of field dictionaries, not the UI schema object."""
@@ -249,12 +256,15 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
         schema = SimpleNamespace(fields=(
             SimpleNamespace(key="db_path", label="Database Path", description="Path", default="~/memory.db", kind="text", is_secret=False, env_key=None),
             SimpleNamespace(key="auto_extract", label="Auto Extract", description="Extract", default="true", kind="bool", is_secret=False, env_key=None),
-            SimpleNamespace(key="max_recall", label="Max Recall", description="Limit", default="5", kind="number", is_secret=False, env_key=None),
+            SimpleNamespace(key="max_recall", label="Max Recall", description="Limit", default="5", kind="number", is_secret=False, env_key=None, minimum=5, maximum=100, step=1),
         ))
         fields = sqlite_memory_module._setup_schema_fields(schema)
 
         self.assertEqual([field["key"] for field in fields], ["db_path", "auto_extract", "max_recall"])
         self.assertEqual(fields[1]["choices"], ["true", "false"])
+        self.assertEqual(fields[2]["minimum"], 5)
+        self.assertEqual(fields[2]["maximum"], 100)
+        self.assertEqual(fields[2]["step"], 1)
         self.assertFalse(any(field.get("secret") for field in fields))
 
     def test_provider_name_matches_hyphenated_plugin_id(self):

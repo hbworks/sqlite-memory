@@ -190,6 +190,10 @@ def _setup_schema_fields(schema) -> List[Dict[str, Any]]:
             item["choices"] = ["true", "false"]
         elif field.kind == "select":
             item["choices"] = [option.value for option in field.options]
+        for bound_key in ("minimum", "maximum", "step"):
+            bound = getattr(field, bound_key, None)
+            if bound is not None:
+                item[bound_key] = bound
         fields.append(item)
     return fields
 
@@ -275,9 +279,12 @@ class SQLiteMemoryProvider(MemoryProvider):
                 },
                 {
                     "key": "max_recall",
-                    "description": "Max prefetch memories (bounded to 1–100)",
+                    "description": "Max prefetch memories (bounded to 5–100)",
                     "default": "5",
                     "secret": False,
+                    "minimum": 5,
+                    "maximum": 100,
+                    "step": 1,
                 },
             ]
 

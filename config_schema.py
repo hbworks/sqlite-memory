@@ -36,7 +36,10 @@ CONFIG_SCHEMA = ProviderConfigSchema(
             label="Max Recall Results",
             kind=KIND_NUMBER,
             default="5",
-            description="Maximum number of relevant memories to inject per turn (bounded to 1–100).",
+            description="Maximum number of relevant memories to inject per turn (bounded to 5–100).",
+            minimum=5,
+            maximum=100,
+            step=1,
             inline=True,
         )
     ),

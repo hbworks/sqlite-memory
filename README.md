@@ -84,7 +84,7 @@ When `db_path` is omitted, memories are stored in `memory.db` under the active p
 
 When `auto_extract` is enabled, only the first non-empty line of a user message is checked, and the entire line must match an explicit English or Japanese memory directive (for example, `Please remember that ...`). Trigger phrases in later lines or pasted examples are ignored. Use `sqlite_remember` for explicit, unambiguous storage.
 
-Search and list result limits, including `max_recall`, are bounded to 1–100.
+Search and list result limits are bounded to 1–100. The Max Recall setting accepts 5–100.
 
 ### 3. Restart Hermes
 
@@ -213,7 +213,7 @@ memory:
 
 `auto_extract` を有効にしても、各ユーザー発言の先頭の空でない1行だけを検査し、その行全体が英語または日本語の明示的な記憶指示に一致した場合に限り保存します。後続行の引用や貼り付けた例に含まれる語句は抽出されません。確実に保存する場合は `sqlite_remember` を使用してください。
 
-検索・一覧の取得件数は `max_recall` を含め、1〜100件の範囲に制限されます。
+検索・一覧の取得件数は 1〜100 件に制限されます。Max Recall の設定入力は 5〜100 です。
 
 ### 3. Hermes の再起動
 
