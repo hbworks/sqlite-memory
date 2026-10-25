@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 MIN_QUERY_LEN = 2
 MAX_RECALL_RESULTS = 5
 MAX_MEMORY_RESULTS = 100
-MAX_JAPANESE_SEARCH_TERMS = 200
+MAX_JAPANESE_SEARCH_TERMS = 500
 INDICATOR_GLYPH = "💾"
 
 # --- Tool Schemas ---
@@ -450,47 +450,113 @@ class SQLiteMemoryProvider(MemoryProvider):
         return any(cls._is_japanese_char(char) for char in text)
 
     @staticmethod
-    def _extend_search_terms(
-        terms: List[str], seen_terms: Set[str], text: str, is_japanese: bool
-    ) -> None:
-        if is_japanese:
-            max_size = min(6, len(text))
-            for size in range(max_size, 1, -1):
-                for start in range(len(text) - size + 1):
-                    term = text[start:start + size]
-                    if term in seen_terms:
-                        continue
-                    seen_terms.add(term)
-                    terms.append(term)
-                    if len(terms) >= MAX_JAPANESE_SEARCH_TERMS:
-                        return
-        elif len(text) >= 2 and text not in seen_terms:
-            seen_terms.add(text)
-            terms.append(text)
+    def _sample_starts(total: int, limit: int) -> List[int]:
+        """Pick indexes across the whole run, including both ends."""
+        if limit <= 0 or total <= 0:
+            return []
+        if total <= limit:
+            return list(range(total))
+        if limit == 1:
+            return [0]
+        last = total - 1
+        chosen = {0, last}
+        if limit > 2:
+            step = last / (limit - 1)
+            for index in range(1, limit - 1):
+                chosen.add(min(last, int(round(index * step))))
+        if len(chosen) < limit:
+            for index in range(last, -1, -1):
+                chosen.add(index)
+                if len(chosen) >= limit:
+                    break
+        return sorted(chosen)[:limit]
+
+    @staticmethod
+    def _proportional_quotas(totals: List[int], room: int) -> List[int]:
+        """Share a term budget across runs so a later short run is not dropped."""
+        if room <= 0 or not totals:
+            return [0 for _ in totals]
+        if sum(totals) <= room:
+            return list(totals)
+        if room < len(totals):
+            order = sorted(range(len(totals)), key=lambda index: totals[index], reverse=True)
+            quotas = [0 for _ in totals]
+            for index in order[:room]:
+                quotas[index] = 1
+            return [min(quotas[index], totals[index]) for index in range(len(totals))]
+
+        quotas = [1 for _ in totals]
+        room -= len(totals)
+        weights = [max(0, total - 1) for total in totals]
+        weight_sum = sum(weights)
+        if room == 0 or weight_sum == 0:
+            return [min(quotas[index], totals[index]) for index in range(len(totals))]
+        raw = [room * weight / weight_sum for weight in weights]
+        extra = [int(value) for value in raw]
+        used = sum(extra)
+        remainders = sorted(
+            range(len(totals)),
+            key=lambda index: (raw[index] - extra[index], totals[index]),
+            reverse=True,
+        )
+        for index in remainders:
+            if used >= room:
+                break
+            if quotas[index] + extra[index] < totals[index]:
+                extra[index] += 1
+                used += 1
+        return [min(totals[index], quotas[index] + extra[index]) for index in range(len(totals))]
+
+    def _add_search_term(self, terms: List[str], seen_terms: Set[str], term: str) -> bool:
+        if not term or term in seen_terms:
+            return len(terms) < MAX_JAPANESE_SEARCH_TERMS
+        if len(terms) >= MAX_JAPANESE_SEARCH_TERMS:
+            return False
+        seen_terms.add(term)
+        terms.append(term)
+        return True
 
     def _search_terms(self, query: str) -> List[str]:
         clean = re.sub(r'[^\w\s\u3000-\u303f\u3040-\u309f\u30a0-\u30ff\uff00-\uff9f\u4e00-\u9faf]', ' ', query)
-        terms: List[str] = []
-        seen_terms: Set[str] = set()
+        japanese_runs: List[str] = []
+        other_words: List[str] = []
         for token in clean.split():
             run_start = 0
             run_is_japanese = self._is_japanese_char(token[0])
             for index, char in enumerate(token[1:], start=1):
                 is_japanese = self._is_japanese_char(char)
                 if is_japanese != run_is_japanese:
-                    self._extend_search_terms(
-                        terms, seen_terms, token[run_start:index], run_is_japanese
-                    )
-                    if len(terms) >= MAX_JAPANESE_SEARCH_TERMS:
-                        return terms
+                    run = token[run_start:index]
+                    if run_is_japanese:
+                        japanese_runs.append(run)
+                    elif len(run) >= 2:
+                        other_words.append(run)
                     run_start = index
                     run_is_japanese = is_japanese
-            self._extend_search_terms(
-                terms, seen_terms, token[run_start:], run_is_japanese
-            )
-            if len(terms) >= MAX_JAPANESE_SEARCH_TERMS:
+            run = token[run_start:]
+            if run_is_japanese:
+                japanese_runs.append(run)
+            elif len(run) >= 2:
+                other_words.append(run)
+
+        terms: List[str] = []
+        seen_terms: Set[str] = set()
+        # Keep Latin tokens even when Japanese fragments fill the rest of the budget.
+        for word in other_words[:10]:
+            if not self._add_search_term(terms, seen_terms, word):
                 return terms
 
+        # 4-grams match stored facts; 5–6-grams rarely do and used to consume the budget first.
+        for size in (4, 3, 2):
+            usable = [run for run in japanese_runs if len(run) >= size]
+            if not usable or len(terms) >= MAX_JAPANESE_SEARCH_TERMS:
+                continue
+            totals = [len(run) - size + 1 for run in usable]
+            quotas = self._proportional_quotas(totals, MAX_JAPANESE_SEARCH_TERMS - len(terms))
+            for run, quota in zip(usable, quotas):
+                for start in self._sample_starts(len(run) - size + 1, quota):
+                    if not self._add_search_term(terms, seen_terms, run[start:start + size]):
+                        return terms
         return terms
 
     def _sanitize_fts_query(self, query: str) -> str:

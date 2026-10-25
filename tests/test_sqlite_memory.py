@@ -571,6 +571,29 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
 
         self.assertIn(content, block)
 
+    def test_prefetch_matches_japanese_keyword_inside_a_paragraph(self):
+        content = "ユーザーはデータ主権を重視する"
+        self.provider.add_memory(content, category="preference")
+        self.provider.add_memory("この関数は例外を処理する", category="general")
+        self.provider.add_memory("レビューしてからマージする", category="general")
+        paragraph = (
+            "このプラグインの実用性を確認したい。設定はプロファイルごとに分かれ、"
+            "画面とエージェントが同じデータベースを見る必要がある。"
+            "特にデータ主権の観点で、保存先がずれていないかを見てほしい。"
+        )
+
+        self.assertTrue(any(fragment in self.provider._search_terms(paragraph) for fragment in ("データ主", "ータ主権")))
+        self.assertIn(content, self.provider.prefetch(paragraph))
+
+    def test_prefetch_matches_japanese_keyword_after_long_prefix(self):
+        content = "ユーザーはデータ主権を重視する"
+        self.provider.add_memory(content, category="preference")
+        prefix = "".join(chr(0x4E00 + (index % 200)) for index in range(220))
+        query = prefix + "データ主権の観点で確認する"
+
+        self.assertTrue(any(fragment in self.provider._search_terms(query) for fragment in ("データ主", "ータ主権")))
+        self.assertIn(content, self.provider.prefetch(query))
+
     def test_japanese_search_terms_are_bounded(self):
         query = "".join(chr(0x4E00 + index) for index in range(300))
 

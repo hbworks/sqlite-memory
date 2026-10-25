@@ -121,7 +121,7 @@ Restart the gateway, and start a new agent session, so the provider and API relo
 | `sqlite_list_memories` | Lists memories, newest `updated_at` first, with an optional category filter | `category` (optional), `limit` (default 10, clamped to 1–100) |
 | `sqlite_stats` | Returns memory count, category counts, last update time, database size, and WAL size | None |
 
-For queries without Japanese kana/kanji, `sqlite_search` drops tokens shorter than 2 characters and keeps at most 10 terms before the FTS query. Japanese kana/kanji runs are split into overlapping 2–6-character fragments (up to 200) for both FTS and LIKE. A LIKE fallback runs only when FTS returns no rows.
+For queries without Japanese kana/kanji, `sqlite_search` drops tokens shorter than 2 characters and keeps at most 10 terms before the FTS query. Japanese kana/kanji runs are split into overlapping 2–4-character fragments (up to 500), taken across the whole run rather than only from the start. A LIKE fallback runs only when FTS returns no rows.
 
 ---
 
@@ -271,7 +271,7 @@ memory:
 | `sqlite_list_memories` | `updated_at` の新しい順に一覧する。カテゴリ絞り込み可 | `category`（任意）, `limit`（既定 10、1〜100） |
 | `sqlite_stats` | 記憶件数・カテゴリ別件数・最終更新日時・DB本体サイズ・WALサイズを返す | なし |
 
-仮名・漢字を含まない検索では、`sqlite_search` は 2 文字未満の語を捨て、FTS に最大 10 語を渡します。日本語の仮名・漢字の連続部分は、重複する 2〜6 文字の断片（最大 200 個）に分け、FTS と LIKE の両方に使います。LIKE へのフォールバックは FTS が 0 件のときだけです。
+仮名・漢字を含まない検索では、`sqlite_search` は 2 文字未満の語を捨て、FTS に最大 10 語を渡します。日本語の仮名・漢字の連続部分は、重複する 2〜4 文字の断片（最大 500 個）に分けます。長い文でも先頭だけで切らず、文全体から取ります。LIKE へのフォールバックは FTS が 0 件のときだけです。
 
 ---
 
