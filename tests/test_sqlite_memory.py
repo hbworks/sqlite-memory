@@ -94,7 +94,7 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
                 "sqlite-memory": {
                     "db_path": str(configured_path),
                     "auto_extract": False,
-                    "max_recall": 3,
+                    "max_recall": 7,
                 },
                 "sqlite_memory": {
                     "db_path": str(legacy_path),
@@ -114,7 +114,7 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
         self.assertEqual(load_calls, ["load"])
         self.assertEqual(provider._db_path, configured_path)
         self.assertFalse(provider._auto_extract)
-        self.assertEqual(provider._max_recall, 3)
+        self.assertEqual(provider._max_recall, 7)
 
     def test_initialize_invalid_max_recall_does_not_retain_previous_value(self):
         configured_path = Path(self.tmpdir) / "custom.db"
@@ -141,7 +141,7 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
         self.assertEqual(provider._max_recall, sqlite_memory_module.MAX_RECALL_RESULTS)
 
     def test_initialize_clamps_max_recall_to_supported_range(self):
-        for configured_value, expected in ((-1, 1), (0, 1), (101, 100)):
+        for configured_value, expected in ((-1, 5), (0, 5), (3, 5), (4, 5), (5, 5), (100, 100), (101, 100)):
             with self.subTest(configured_value=configured_value):
                 config = {
                     "memory": {

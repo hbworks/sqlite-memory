@@ -217,6 +217,11 @@ def _bounded_limit(value: Any, default: int) -> int:
     return max(1, min(limit, MAX_MEMORY_RESULTS))
 
 
+def _bounded_max_recall(value: Any, default: int = MAX_RECALL_RESULTS) -> int:
+    """Clamp the configured recall count to the settings range (5–100)."""
+    return max(MAX_RECALL_RESULTS, _bounded_limit(value, default=default))
+
+
 def _get_hermes_backup_root(hermes_home: Path) -> Path:
     """Resolve the root covered by Hermes backup for a profile-scoped home."""
     resolved_home = hermes_home.expanduser().resolve()
@@ -354,7 +359,7 @@ class SQLiteMemoryProvider(MemoryProvider):
                 config, cfg_get, "max_recall", default=MAX_RECALL_RESULTS
             )
             try:
-                max_recall = _bounded_limit(max_rec, default=MAX_RECALL_RESULTS)
+                max_recall = _bounded_max_recall(max_rec, default=MAX_RECALL_RESULTS)
             except ValueError:
                 logger.warning(
                     "Invalid SQLite memory max_recall %r; using default %d",

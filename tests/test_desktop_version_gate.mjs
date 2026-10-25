@@ -27,6 +27,25 @@ function loadVersionCompatibility() {
   return vm.runInContext(`${pluginSource.slice(start, end + 2)}\nisPluginVersionCompatible`, context)
 }
 
+function loadTranslations() {
+  const localeStart = pluginSource.indexOf('const getLocale = () => {')
+  const localeEnd = pluginSource.indexOf('\n}\n\nfunction isPluginVersionCompatible', localeStart)
+  const tStart = pluginSource.indexOf('\nconst t = {')
+  const tEnd = pluginSource.indexOf('\n}\n\n/**\n * カテゴリ別スタイル設定', tStart)
+  assert.notEqual(localeStart, -1, 'locale helper exists')
+  assert.notEqual(localeEnd, -1, 'locale helper ends')
+  assert.notEqual(tStart, -1, 'translation table exists')
+  assert.notEqual(tEnd, -1, 'translation table ends')
+  const context = vm.createContext({
+    document: { documentElement: { lang: 'ja' } },
+    navigator: { language: 'ja', languages: ['ja'] }
+  })
+  return vm.runInContext(
+    `${pluginSource.slice(localeStart, localeEnd + 2)}\n${pluginSource.slice(tStart + 1, tEnd + 2)}\nt`,
+    context
+  )
+}
+
 function renderPage(versionStatus, pluginVersion) {
   const components = [
     'MemoryTopHeader',
@@ -76,12 +95,7 @@ function renderPage(versionStatus, pluginVersion) {
     jsx: (type, props) => ({ type, props }),
     jsxs: (type, props) => ({ type, props }),
     S: { page: {} },
-    t: {
-      versionChecking: 'バージョンを確認中...',
-      versionUnavailable: 'バージョンを確認できませんでした',
-      unknownVersion: '不明',
-      versionMismatch: (expected, actual) => `バージョンが違います（Desktop: ${expected}, profile: ${actual}）`
-    },
+    t: loadTranslations(),
     ...Object.fromEntries(components.map((component) => [component, component]))
   })
   const MemoryManagementPage = vm.runInContext(`${pageSource}\nMemoryManagementPage`, context)
@@ -117,12 +131,24 @@ test('only an exact profile plugin version is compatible', () => {
 
 test('shows a version warning instead of memory UI for a mismatched profile', () => {
   const rendered = collectTree(renderPage('mismatch', '9.8.7'))
+  const text = rendered.text.join('')
 
-  assert.ok(rendered.text.join('').includes('バージョンが違います'))
-  assert.ok(rendered.text.join('').includes('9.8.7'))
+  assert.ok(text.includes('バージョンが違います'))
+  assert.ok(text.includes('9.8.7'))
+  assert.ok(text.includes('プロファイル配下に古いプラグイン'), 'mismatch hint explains the stale profile copy')
+  assert.ok(text.includes('再試行'), 'retry uses the real label, not the Reload fallback')
   assert.ok(!rendered.types.includes('MemoryTopHeader'))
   assert.ok(rendered.types.includes('MemorySubBar'), 'profile selector remains available during a version mismatch')
-  assert.ok(rendered.text.join('').includes('再試行') || rendered.text.join('').includes('Reload'), 'retry button is available on mismatch')
+})
+
+test('explains an unavailable backend without showing the memory editor', () => {
+  const rendered = collectTree(renderPage('unavailable', null))
+  const text = rendered.text.join('')
+
+  assert.ok(text.includes('バックエンド API に接続できませんでした'))
+  assert.ok(text.includes('再試行'))
+  assert.ok(!rendered.types.includes('MemoryTopHeader'))
+  assert.ok(rendered.types.includes('MemorySubBar'))
 })
 
 test('renders memory UI when the selected profile version matches', () => {
