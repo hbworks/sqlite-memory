@@ -130,6 +130,17 @@ const t = {
   versionMismatch: (desktopVersion, profileVersion) => getLocale() === 'ja'
     ? `バージョンが違います（Desktop プラグイン: ${desktopVersion}、プロファイル: ${profileVersion}）`
     : `Plugin version mismatch (Desktop plugin: ${desktopVersion}, profile: ${profileVersion})`,
+  get versionMismatchHint() {
+    return getLocale() === 'ja'
+      ? 'プロファイル配下に古いプラグインが存在するか、バックエンドが古い可能性があります。~/.hermes/profiles/<profile>/plugins/ のコピーを確認してください。'
+      : 'The profile may have an outdated plugin copy or backend. Check ~/.hermes/profiles/<profile>/plugins/.'
+  },
+  get versionUnavailableHint() {
+    return getLocale() === 'ja'
+      ? 'バックエンド API に接続できませんでした。Hermes が起動しているか確認してください。'
+      : 'Could not connect to the backend API. Please make sure Hermes is running.'
+  },
+  get retry() { return getLocale() === 'ja' ? '再試行' : 'Retry' },
   get noMatches() { return getLocale() === 'ja' ? '一致なし' : 'No matches found' },
   get noMemories() { return getLocale() === 'ja' ? '記憶がありません' : 'No memories found' },
   get tryOtherKeyword() { return getLocale() === 'ja' ? '別のキーワードをお試しください' : 'Try a different keyword' },
@@ -325,6 +336,7 @@ function useMemoryState() {
 
   const containerRef = useRef(null)
   const profileLoadRef = useRef(0)
+  const memoryLoadRef = useRef(0)
   const isManuallySelected = useRef(false)
   const prevHostProfileRef = useRef(hostProfileName)
 
@@ -357,9 +369,9 @@ function useMemoryState() {
   }, [])
 
   // 統計情報の取得
-  const loadStats = useCallback(async (requestId) => {
+  const loadStats = useCallback(async (profile, requestId) => {
     try {
-      const data = await api(`/stats?profile=${encodeURIComponent(selectedProfile)}`)
+      const data = await api(`/stats?profile=${encodeURIComponent(profile)}`)
       if (requestId !== profileLoadRef.current) return null
       setTotal(data.total_memories || 0)
       setCategories(data.categories || {})
@@ -372,34 +384,38 @@ function useMemoryState() {
       console.warn('Error loading memory stats:', e)
       return null
     }
-  }, [selectedProfile])
+  }, [])
 
   // メモリ一覧の取得
-  const loadMemories = useCallback(async (requestId) => {
+  const fetchMemories = useCallback(async (profile, q, cat, currentProfileId) => {
+    const reqId = ++memoryLoadRef.current
     setLoading(true)
     try {
-      const params = new URLSearchParams({ profile: selectedProfile, limit: '100', offset: '0' })
-      if (query.trim()) params.append('query', query.trim())
-      if (selectedCategory && selectedCategory !== 'all') params.append('category', selectedCategory)
+      const params = new URLSearchParams({ profile, limit: '100', offset: '0' })
+      if (q.trim()) params.append('query', q.trim())
+      if (cat && cat !== 'all') params.append('category', cat)
 
       const data = await api(`/memories?${params.toString()}`)
-      if (requestId !== profileLoadRef.current) return
+      if (reqId !== memoryLoadRef.current || currentProfileId !== profileLoadRef.current) return
       const loaded = data.items || []
       setItems(loaded)
       setSelectedId((prev) => (prev && loaded.some((i) => i.id === prev) ? prev : (loaded[0]?.id ?? null)))
     } catch (e) {
       console.error('Error loading memories:', e)
     } finally {
-      if (requestId === profileLoadRef.current) setLoading(false)
+      if (reqId === memoryLoadRef.current && currentProfileId === profileLoadRef.current) {
+        setLoading(false)
+      }
     }
-  }, [selectedProfile, query, selectedCategory])
+  }, [])
 
+  // プロファイルのロード & バージョン検証
   const loadCurrentProfile = useCallback(async () => {
     const requestId = ++profileLoadRef.current
     setLoading(true)
     setPluginVersion(null)
     setVersionStatus('checking')
-    const stats = await loadStats(requestId)
+    const stats = await loadStats(selectedProfile, requestId)
     if (requestId !== profileLoadRef.current) return
     if (!stats) {
       setVersionStatus('unavailable')
@@ -413,7 +429,7 @@ function useMemoryState() {
     setPluginVersion(profileVersion)
     if (isPluginVersionCompatible(profileVersion)) {
       setVersionStatus('compatible')
-      await loadMemories(requestId)
+      await fetchMemories(selectedProfile, query, selectedCategory, requestId)
       return
     }
 
@@ -421,11 +437,28 @@ function useMemoryState() {
     setItems([])
     setSelectedId(null)
     setLoading(false)
-  }, [loadStats, loadMemories])
+  }, [selectedProfile, loadStats, fetchMemories, query, selectedCategory])
 
+  // プロファイル切り替え時のみプロファイル全体を再読み込み
   useEffect(() => {
     loadCurrentProfile()
-  }, [loadCurrentProfile])
+  }, [selectedProfile])
+
+  // 検索クエリやカテゴリ変更時は、互換性検証済みのまま一覧のみをデバウンス更新
+  const isInitialMount = useRef(true)
+  useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false
+      return
+    }
+    if (versionStatus !== 'compatible') return
+
+    const timer = setTimeout(() => {
+      fetchMemories(selectedProfile, query, selectedCategory, profileLoadRef.current)
+    }, 200)
+
+    return () => clearTimeout(timer)
+  }, [query, selectedCategory, versionStatus, selectedProfile, fetchMemories])
 
   const activeMemory = useMemo(() => items.find((i) => i.id === selectedId) || null, [items, selectedId])
 
@@ -449,7 +482,8 @@ function useMemoryState() {
       setShowAddModal(false)
       setEditId(null)
       setFormContent('')
-      await loadCurrentProfile()
+      await loadStats(selectedProfile, profileLoadRef.current)
+      await fetchMemories(selectedProfile, query, selectedCategory, profileLoadRef.current)
     } catch (err) {
       console.error('Error saving memory:', err)
       alert(t.saveError(err.message))
@@ -465,7 +499,8 @@ function useMemoryState() {
       await api(`/memories/${id}?profile=${encodeURIComponent(selectedProfile)}`, { method: 'DELETE' })
       if (selectedId === id) setSelectedId(null)
       if (isCompact) setMobileDetailOpen(false)
-      await loadCurrentProfile()
+      await loadStats(selectedProfile, profileLoadRef.current)
+      await fetchMemories(selectedProfile, query, selectedCategory, profileLoadRef.current)
     } catch (err) {
       console.error('Error deleting memory:', err)
       alert(t.deleteError(err.message))
@@ -927,6 +962,12 @@ function MemoryManagementPage() {
         ? t.versionMismatch(DESKTOP_PLUGIN_VERSION, state.pluginVersion || t.unknownVersion)
         : t.versionUnavailable
 
+    const hint = state.versionStatus === 'mismatch'
+      ? (t.versionMismatchHint || '')
+      : state.versionStatus === 'unavailable'
+        ? (t.versionUnavailableHint || '')
+        : ''
+
     return jsxs('div', {
       ref: state.containerRef,
       style: S.page,
@@ -940,12 +981,26 @@ function MemoryManagementPage() {
           total: state.total,
           onReload: state.reloadAll
         }),
-        jsx('div', {
-          style: { display: 'flex', flex: 1, alignItems: 'center', justifyContent: 'center', padding: '24px', textAlign: 'center' },
-          children: jsx('div', {
-            style: { fontSize: '13px', color: 'var(--foreground, #111827)' },
-            children: message
-          })
+        jsxs('div', {
+          style: { display: 'flex', flex: 1, flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '24px', textAlign: 'center', gap: '8px' },
+          children: [
+            jsx('div', {
+              style: { fontSize: '13px', color: 'var(--foreground, #111827)', fontWeight: 500 },
+              children: message
+            }),
+            hint ? jsx('div', {
+              style: { fontSize: '12px', color: '#6b7280', maxWidth: '480px', lineHeight: 1.5 },
+              children: hint
+            }) : null,
+            state.versionStatus !== 'checking' ? jsx('button', {
+              onClick: state.reloadAll,
+              style: { ...S.btnAction, marginTop: '8px' },
+              children: [
+                typeof Codicon !== 'undefined' ? jsx(Codicon, { name: 'refresh', size: '0.8rem' }) : null,
+                ` ${t.retry || t.refresh || 'Reload'}`
+              ].filter(Boolean)
+            }) : null
+          ]
         })
       ]
     })
