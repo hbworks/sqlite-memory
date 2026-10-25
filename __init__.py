@@ -200,7 +200,7 @@ def _setup_schema_fields(schema) -> List[Dict[str, Any]]:
 
 
 def _normalize_memory_content(content: str) -> str:
-    """Normalize text conservatively for matching mirrored entries."""
+    """Normalize text conservatively for deduplication and mirror matching."""
     normalized = unicodedata.normalize("NFKC", content)
     return " ".join(normalized.split())
 
@@ -546,8 +546,8 @@ class SQLiteMemoryProvider(MemoryProvider):
             if not self._add_search_term(terms, seen_terms, word):
                 return terms
 
-        # 4-grams match stored facts; 5–6-grams rarely do and used to consume the budget first.
-        for size in (4, 3, 2):
+        # Keep 5-grams for stronger Japanese matches; shorter fragments are recall fallbacks.
+        for size in (5, 4, 3, 2):
             usable = [run for run in japanese_runs if len(run) >= size]
             if not usable or len(terms) >= MAX_JAPANESE_SEARCH_TERMS:
                 continue
@@ -561,12 +561,48 @@ class SQLiteMemoryProvider(MemoryProvider):
 
     def _sanitize_fts_query(self, query: str) -> str:
         terms = self._search_terms(query)
+        if self._contains_japanese(query):
+            # Short Japanese fragments are handled by the ranked substring query,
+            # not as low-precision alternatives in FTS.
+            terms = [
+                term for term in terms
+                if not self._contains_japanese(term) or len(term) >= 3
+            ]
         max_terms = MAX_JAPANESE_SEARCH_TERMS if self._contains_japanese(query) else 10
         terms = terms[:max_terms]
         return " OR ".join(f'"{term}"' for term in terms) if terms else ""
 
+    def _search_japanese_memories(
+        self,
+        conn: sqlite3.Connection,
+        terms: List[str],
+        limit: int,
+        category: Optional[str],
+    ) -> List[sqlite3.Row]:
+        """Search Japanese substrings and prefer the longest matching fragment."""
+        if not terms:
+            return []
+
+        values = ", ".join("(?)" for _ in terms)
+        sql = f"""
+            WITH search_terms(term) AS (VALUES {values})
+            SELECT m.id, m.category, m.content, m.created_at,
+                   MAX(length(search_terms.term)) AS match_length,
+                   m.updated_at
+            FROM memories AS m
+            JOIN search_terms
+              ON m.content LIKE '%' || search_terms.term || '%'
+        """
+        params: List[Any] = list(terms)
+        if category:
+            sql += " WHERE m.category = ?"
+            params.append(category)
+        sql += " GROUP BY m.id ORDER BY match_length DESC, m.updated_at DESC LIMIT ?"
+        params.append(limit)
+        return conn.execute(sql, params).fetchall()
+
     def search_memories(self, query: str, limit: int = 5, category: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Search memories using FTS5 with fallback to LIKE search."""
+        """Search with FTS5 and rank Japanese substring matches by fragment length."""
         limit = _bounded_limit(limit, default=5)
         results: List[Dict[str, Any]] = []
         rows = []
@@ -589,16 +625,25 @@ class SQLiteMemoryProvider(MemoryProvider):
 
                 rows = conn.execute(sql, params).fetchall()
 
-            # Fallback to LIKE search if FTS returned nothing
-            if not rows and query.strip():
-                if self._contains_japanese(query):
-                    keywords = self._search_terms(query)[:MAX_JAPANESE_SEARCH_TERMS]
-                else:
-                    keywords = [
-                        keyword.strip()
-                        for keyword in query.split()
-                        if len(keyword.strip()) >= 2
-                    ][:3]
+            if self._contains_japanese(query):
+                fts_rows = rows
+                japanese_terms = [
+                    term for term in self._search_terms(query)
+                    if self._contains_japanese(term)
+                ]
+                japanese_rows = self._search_japanese_memories(
+                    conn, japanese_terms, limit, category
+                )
+                seen_ids = {row["id"] for row in japanese_rows}
+                rows = list(japanese_rows)
+                rows.extend(row for row in fts_rows if row["id"] not in seen_ids)
+                rows = rows[:limit]
+            elif not rows and query.strip():
+                keywords = [
+                    keyword.strip()
+                    for keyword in query.split()
+                    if len(keyword.strip()) >= 2
+                ][:3]
                 if keywords:
                     where = " OR ".join(["m.content LIKE ?" for _ in keywords])
                     sql = f"SELECT id, category, content, created_at FROM memories m WHERE ({where})"
@@ -645,11 +690,25 @@ class SQLiteMemoryProvider(MemoryProvider):
         pass
 
     def add_memory(self, content: str, category: str = "general", source: str = "manual") -> int:
+        cleaned_content = content.strip()
         with self._conn() as conn:
             with conn:
+                if source == "auto_extract":
+                    # Replayed directives should not duplicate extracted rows. Keep
+                    # this check atomic without suppressing intentional other writes.
+                    conn.execute("BEGIN IMMEDIATE")
+                    normalized_content = _normalize_memory_content(cleaned_content)
+                    if normalized_content:
+                        existing_rows = conn.execute(
+                            "SELECT id, content FROM memories WHERE category = ?",
+                            (category,),
+                        ).fetchall()
+                        for row in existing_rows:
+                            if _normalize_memory_content(row["content"]) == normalized_content:
+                                return int(row["id"])
                 cursor = conn.execute(
                     "INSERT INTO memories (category, content, source, session_id) VALUES (?, ?, ?, ?)",
-                    (category, content.strip(), source, self._session_id),
+                    (category, cleaned_content, source, self._session_id),
                 )
                 return cursor.lastrowid or 0
 

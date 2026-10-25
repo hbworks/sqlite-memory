@@ -571,6 +571,43 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
 
         self.assertIn(content, block)
 
+    def test_japanese_search_ranks_longer_matches_before_recent_noise(self):
+        content = "ユーザーはデータ主権を重視する"
+        target_id = self.provider.add_memory(content, category="preference")
+        noise_ids = [
+            self.provider.add_memory(
+                f"設計レビューの記録を確認して保存する {index}", category="general"
+            )
+            for index in range(10)
+        ]
+        with self.provider._conn() as conn:
+            with conn:
+                for index, memory_id in enumerate(noise_ids, start=1):
+                    conn.execute(
+                        "UPDATE memories SET updated_at = ? WHERE id = ?",
+                        (f"2099-01-01 00:00:{index:02d}", memory_id),
+                    )
+
+        results = self.provider.search_memories(
+            "データ主権の観点でこの設計をレビューして", limit=5
+        )
+
+        self.assertEqual(results[0]["id"], target_id)
+
+    def test_japanese_search_merges_with_english_fts_results(self):
+        english = "Hermes memory uses a local SQLite database"
+        japanese = "このユーザーはデータ主権を最優先する"
+        self.provider.add_memory(english, category="project")
+        self.provider.add_memory(japanese, category="preference")
+
+        results = self.provider.search_memories(
+            "Hermes の記憶がデータ主権の保存先と一致するか"
+        )
+
+        contents = [row["content"] for row in results]
+        self.assertIn(english, contents)
+        self.assertIn(japanese, contents)
+
     def test_prefetch_matches_japanese_keyword_inside_a_paragraph(self):
         content = "ユーザーはデータ主権を重視する"
         self.provider.add_memory(content, category="preference")
@@ -614,6 +651,24 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
         self.provider.sync_turn("私の好みを覚えておいて：ダークテーマを優先すること", "承知いたしました。")
         all_pref = self.provider.list_memories(category="preference")
         self.assertEqual(len(all_pref), 2)
+
+    def test_auto_extract_deduplicates_normalized_content_within_category(self):
+        self.provider.add_memory("私はWALを保持する", category="general")
+        directives = (
+            "覚えておいて：私はＷＡＬを保持する",
+            "覚えておいて：私はＷＡＬを保持する",
+            "覚えておいて：私はWALを保持する",
+        )
+
+        for directive in directives:
+            self.provider.sync_turn(directive, "")
+
+        preferences = self.provider.list_memories(category="preference")
+        general = self.provider.list_memories(category="general")
+        self.assertEqual(len(preferences), 1)
+        self.assertEqual(preferences[0]["content"], "私はＷＡＬを保持する")
+        self.assertEqual(len(general), 1)
+        self.assertEqual(self.provider.get_stats()["total_memories"], 2)
 
     def test_auto_extract_japanese_remember_without_leading_subject(self):
         content = "私はXboxが好き"
@@ -1497,6 +1552,26 @@ memory:
                     asyncio.run(get_stats(profile="default"))
 
         self.assertEqual(ctx.exception.status_code, 500)
+
+    def test_list_memories_returns_500_when_database_read_fails(self):
+        import asyncio
+        import sqlite3
+        from unittest.mock import patch
+        from dashboard.plugin_api import HTTPException, list_memories
+
+        errors = (
+            sqlite3.OperationalError("database is locked"),
+            sqlite3.DatabaseError("database disk image is malformed"),
+        )
+        for error in errors:
+            with self.subTest(error=str(error)):
+                with patch("dashboard.plugin_api._db_conn", side_effect=error):
+                    with self.assertRaises(HTTPException) as ctx:
+                        asyncio.run(list_memories(profile="default"))
+
+                self.assertEqual(ctx.exception.status_code, 500)
+                self.assertEqual(ctx.exception.detail, "Failed to list memories")
+                self.assertNotIn(str(error), ctx.exception.detail)
 
     def test_plugin_api_standalone_import_resolves_dependencies(self):
         """Web server dashboard loads plugin_api via spec_from_file_location without parent package."""

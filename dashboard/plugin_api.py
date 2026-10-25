@@ -368,7 +368,10 @@ async def list_memories(
         raise
     except Exception as e:
         logger.error("Error listing memories: %s", e)
-        return {"items": [], "total": 0, "limit": limit, "offset": offset}
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to list memories",
+        ) from e
 
 
 @router.post("/memories", status_code=http_status.HTTP_201_CREATED)

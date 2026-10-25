@@ -159,10 +159,10 @@ const t = {
  * カテゴリ別スタイル設定
  */
 const getCategoryStyles = () => ({
-  preference: { label: t.preference, dot: '#6366f1', badgeBg: 'rgba(99, 102, 241, 0.1)', badgeColor: '#4f46e5' },
-  project:    { label: t.project,    dot: '#10b981', badgeBg: 'rgba(16, 185, 129, 0.1)', badgeColor: '#059669' },
-  rule:       { label: t.rule,       dot: '#f59e0b', badgeBg: 'rgba(245, 158, 11, 0.1)', badgeColor: '#d97706' },
-  general:    { label: t.general,    dot: '#8b5cf6', badgeBg: 'rgba(139, 92, 246, 0.1)', badgeColor: '#7c3aed' }
+  preference: { label: t.preference, dot: 'var(--ui-accent)', badgeBg: 'color-mix(in srgb, var(--ui-accent) 12%, var(--card, var(--dt-card)))', badgeColor: 'var(--foreground, var(--dt-foreground))' },
+  project:    { label: t.project,    dot: 'var(--ui-green)', badgeBg: 'color-mix(in srgb, var(--ui-green) 12%, var(--card, var(--dt-card)))', badgeColor: 'var(--foreground, var(--dt-foreground))' },
+  rule:       { label: t.rule,       dot: 'var(--ui-warm)', badgeBg: 'color-mix(in srgb, var(--ui-warm) 12%, var(--card, var(--dt-card)))', badgeColor: 'var(--foreground, var(--dt-foreground))' },
+  general:    { label: t.general,    dot: 'var(--ui-purple)', badgeBg: 'color-mix(in srgb, var(--ui-purple) 12%, var(--card, var(--dt-card)))', badgeColor: 'var(--foreground, var(--dt-foreground))' }
 })
 
 /**
@@ -231,8 +231,8 @@ const S = {
     flexDirection: 'column',
     height: '100%',
     width: '100%',
-    backgroundColor: 'var(--background, #ffffff)',
-    color: 'var(--foreground, #111827)',
+    backgroundColor: 'var(--card, var(--dt-card))',
+    color: 'var(--foreground, var(--dt-foreground))',
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
     fontSize: '13px',
     overflow: 'hidden',
@@ -250,8 +250,8 @@ const S = {
     borderRadius: '6px',
     fontSize: '12px',
     fontWeight: 500,
-    backgroundColor: 'var(--primary, #18181b)',
-    color: 'var(--primary-foreground, #ffffff)',
+    backgroundColor: 'var(--primary, var(--dt-primary))',
+    color: 'var(--primary-foreground, var(--dt-primary-foreground))',
     border: 'none',
     cursor: 'pointer',
     flexShrink: 0,
@@ -265,19 +265,19 @@ const S = {
     borderRadius: '4px',
     fontSize: '11px',
     fontWeight: 500,
-    border: '1px solid #e5e7eb',
-    backgroundColor: '#ffffff',
-    color: '#374151',
+    border: '1px solid var(--border, var(--dt-border))',
+    backgroundColor: 'var(--card, var(--dt-card))',
+    color: 'var(--foreground, var(--dt-foreground))',
     cursor: 'pointer'
   },
   input: {
     width: '100%',
-    backgroundColor: '#fafafa',
-    border: '1px solid #d1d5db',
+    backgroundColor: 'var(--card, var(--dt-card))',
+    border: '1px solid var(--ui-stroke-primary)',
     borderRadius: '6px',
     padding: '6px 10px',
     fontSize: '12px',
-    color: '#111827',
+    color: 'var(--foreground, var(--dt-foreground))',
     outline: 'none',
     boxSizing: 'border-box'
   }
@@ -581,7 +581,7 @@ function MemoryTopHeader({
   onOpenAddModal
 }) {
   return jsxs('div', {
-    style: { padding: '14px 18px 10px 18px', borderBottom: '1px solid var(--border, #e5e7eb)', ...S.flexCol, gap: '10px', flexShrink: 0 },
+    style: { padding: '14px 18px 10px 18px', borderBottom: '1px solid var(--ui-stroke-secondary)', ...S.flexCol, gap: '10px', flexShrink: 0 },
     children: [
       jsxs('div', {
         style: { ...S.flexBetween, gap: '12px' },
@@ -591,7 +591,7 @@ function MemoryTopHeader({
             style: { position: 'relative', display: 'flex', alignItems: 'center', flex: 1, maxWidth: '320px' },
             children: [
               jsx('span', {
-                style: { position: 'absolute', left: '8px', color: '#9ca3af', display: 'flex', pointerEvents: 'none' },
+                style: { position: 'absolute', left: '8px', color: 'var(--ui-text-quaternary)', display: 'flex', pointerEvents: 'none' },
                 children: jsx(Codicon, { name: 'search', size: '0.9rem' })
               }),
               jsx('input', {
@@ -599,7 +599,7 @@ function MemoryTopHeader({
                 placeholder: t.searchPlaceholder,
                 value: query,
                 onChange: (e) => setQuery(e.target.value),
-                style: { width: '100%', border: 'none', background: 'transparent', paddingLeft: '28px', paddingRight: '8px', paddingTop: '4px', paddingBottom: '4px', fontSize: '13px', color: 'var(--foreground, #111827)', outline: 'none' }
+                style: { width: '100%', border: 'none', background: 'transparent', paddingLeft: '28px', paddingRight: '8px', paddingTop: '4px', paddingBottom: '4px', fontSize: '13px', color: 'var(--foreground, var(--dt-foreground))', outline: 'none' }
               })
             ]
           }),
@@ -615,7 +615,7 @@ function MemoryTopHeader({
       jsxs('div', {
         style: { ...S.flexCol, gap: '6px' },
         children: [
-          jsx('span', { style: { fontSize: '11px', color: '#6b7280', fontWeight: 500 }, children: t.category }),
+          jsx('span', { style: { fontSize: '11px', color: 'var(--ui-text-secondary)', fontWeight: 500 }, children: t.category }),
           jsx('div', {
             style: { display: 'flex', alignItems: 'center', gap: '8px', overflowX: 'auto', whiteSpace: 'nowrap', scrollbarWidth: 'none', paddingBottom: '2px' },
             children: categoryPills.map((pill) => {
@@ -631,9 +631,9 @@ function MemoryTopHeader({
                   borderRadius: '9999px',
                   fontSize: '12px',
                   fontWeight: isSelected ? 600 : 400,
-                  backgroundColor: isSelected ? '#f3f4f6' : 'transparent',
-                  color: isSelected ? '#111827' : '#4b5563',
-                  border: isSelected ? '1.5px solid #111827' : '1px solid #e5e7eb',
+                  backgroundColor: isSelected ? 'var(--ui-row-active-background)' : 'transparent',
+                  color: isSelected ? 'var(--foreground, var(--dt-foreground))' : 'var(--ui-text-secondary)',
+                  border: isSelected ? '1.5px solid var(--ui-accent)' : '1px solid var(--ui-stroke-secondary)',
                   cursor: 'pointer',
                   flexShrink: 0
                 },
@@ -662,22 +662,22 @@ function MemorySubBar({
   onReload
 }) {
   return jsxs('div', {
-    style: { ...S.flexBetween, padding: '6px 18px', backgroundColor: '#fafafa', borderBottom: '1px solid var(--border, #e5e7eb)', fontSize: '11px', color: '#6b7280', flexShrink: 0 },
+    style: { ...S.flexBetween, padding: '6px 18px', backgroundColor: 'var(--ui-bg-tertiary)', borderBottom: '1px solid var(--ui-stroke-secondary)', fontSize: '11px', color: 'var(--ui-text-secondary)', flexShrink: 0 },
     children: [
       jsxs('div', {
         style: { ...S.flexRow, gap: '8px', minWidth: 0 },
         children: [
-          jsx('span', { style: { fontWeight: 500, color: '#374151' }, children: t.profileLabel }),
+          jsx('span', { style: { fontWeight: 500, color: 'var(--ui-text-secondary)' }, children: t.profileLabel }),
           jsx('select', {
             value: selectedProfile,
             onChange: (e) => onSelectProfile(e.target.value),
-            style: { padding: '2px 6px', borderRadius: '4px', border: '1px solid #d1d5db', backgroundColor: '#ffffff', fontSize: '11px', fontWeight: 600, color: '#111827', cursor: 'pointer', outline: 'none' },
+            style: { padding: '2px 6px', borderRadius: '4px', border: '1px solid var(--ui-stroke-primary)', backgroundColor: 'var(--card, var(--dt-card))', fontSize: '11px', fontWeight: 600, color: 'var(--foreground, var(--dt-foreground))', cursor: 'pointer', outline: 'none' },
             children: availableProfiles.map((p) => jsx('option', { key: p, value: p, children: p === 'default' ? t.defaultProfileLabel : p }, p))
           }),
-          jsx('span', { style: { color: '#d1d5db' }, children: '•' }),
-          jsx('span', { style: { color: '#6b7280' }, children: t.storageLabel }),
+          jsx('span', { style: { color: 'var(--ui-text-quaternary)' }, children: '•' }),
+          jsx('span', { style: { color: 'var(--ui-text-tertiary)' }, children: t.storageLabel }),
           jsx('span', {
-            style: { fontWeight: 500, color: '#111827', ...S.ellipsis, maxWidth: '320px' },
+            style: { fontWeight: 500, color: 'var(--foreground, var(--dt-foreground))', ...S.ellipsis, maxWidth: '320px' },
             title: dbPath || t.storageUnknown,
             children: dbPath ? `SQLite (${dbPath})` : t.storageUnknown
           })
@@ -718,9 +718,9 @@ function MemoryListItem({
       alignItems: 'center',
       justifyContent: 'space-between',
       gap: '8px',
-      backgroundColor: isSelected ? '#f3f4f6' : 'transparent',
-      borderLeft: isSelected ? '3px solid #111827' : '3px solid transparent',
-      borderBottom: '1px solid rgba(0, 0, 0, 0.03)'
+      backgroundColor: isSelected ? 'var(--ui-row-active-background)' : 'transparent',
+      borderLeft: isSelected ? '3px solid var(--ui-accent)' : '3px solid transparent',
+      borderBottom: '1px solid var(--ui-stroke-quaternary)'
     },
     children: [
       jsxs('div', {
@@ -730,13 +730,13 @@ function MemoryListItem({
           jsxs('div', {
             style: { display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 },
             children: [
-              jsx('span', { style: { fontSize: '12px', fontWeight: isSelected ? 600 : 500, color: '#111827', whiteSpace: 'nowrap' }, children: `Memory #${item.id}` }),
-              jsx('span', { style: { fontSize: '11px', color: '#6b7280', ...S.ellipsis }, children: item.content })
+              jsx('span', { style: { fontSize: '12px', fontWeight: isSelected ? 600 : 500, color: 'var(--foreground, var(--dt-foreground))', whiteSpace: 'nowrap' }, children: `Memory #${item.id}` }),
+              jsx('span', { style: { fontSize: '11px', color: 'var(--ui-text-secondary)', ...S.ellipsis }, children: item.content })
             ]
           })
         ]
       }),
-      jsx('span', { style: { fontSize: '9px', color: '#9ca3af', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }, children: formatLocalDateShort(item.created_at) })
+      jsx('span', { style: { fontSize: '9px', color: 'var(--ui-text-quaternary)', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }, children: formatLocalDateShort(item.created_at) })
     ]
   })
 }
@@ -759,19 +759,19 @@ function MemoryListColumn({
       width: isCompact ? '100%' : '210px',
       minWidth: isCompact ? '100%' : '190px',
       maxWidth: isCompact ? '100%' : '230px',
-      borderRight: isCompact ? 'none' : '1px solid var(--border, #e5e7eb)',
-      backgroundColor: 'var(--background, #ffffff)',
+      borderRight: isCompact ? 'none' : '1px solid var(--ui-stroke-secondary)',
+      backgroundColor: 'var(--card, var(--dt-card))',
       overflowY: 'auto',
       height: '100%',
       boxSizing: 'border-box'
     },
     children: loading ? (
-      jsx('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '30px 10px', fontSize: '11px', color: '#6b7280' }, children: t.loading })
+      jsx('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '30px 10px', fontSize: '11px', color: 'var(--ui-text-secondary)' }, children: t.loading })
     ) : items.length === 0 ? (
       jsxs('div', {
-        style: { padding: '24px 14px', textAlign: 'center', fontSize: '11px', color: '#6b7280' },
+        style: { padding: '24px 14px', textAlign: 'center', fontSize: '11px', color: 'var(--ui-text-secondary)' },
         children: [
-          jsx('div', { style: { fontWeight: 500, color: '#111827', marginBottom: '4px' }, children: query ? t.noMatches : t.noMemories }),
+          jsx('div', { style: { fontWeight: 500, color: 'var(--foreground, var(--dt-foreground))', marginBottom: '4px' }, children: query ? t.noMatches : t.noMemories }),
           jsx('p', { style: { fontSize: '10px', opacity: 0.75, margin: 0, lineHeight: 1.4 }, children: query ? t.tryOtherKeyword : t.emptyHint })
         ]
       })
@@ -797,7 +797,7 @@ function MemoryDetailColumn({
   onBackToList
 }) {
   return jsx('div', {
-    style: { flex: 1, overflowY: 'auto', padding: '20px 24px', backgroundColor: 'var(--background, #ffffff)', height: '100%', boxSizing: 'border-box' },
+    style: { flex: 1, overflowY: 'auto', padding: '20px 24px', backgroundColor: 'var(--card, var(--dt-card))', height: '100%', boxSizing: 'border-box' },
     children: activeMemory ? (
       jsxs('div', {
         style: { maxWidth: '580px', display: 'flex', flexDirection: 'column', gap: '18px' },
@@ -813,7 +813,7 @@ function MemoryDetailColumn({
               jsxs('div', {
                 style: { display: 'flex', alignItems: 'center', gap: '8px' },
                 children: [
-                  jsx('h2', { style: { fontSize: '18px', fontWeight: 600, margin: 0, color: '#111827' }, children: `Memory #${activeMemory.id}` }),
+                  jsx('h2', { style: { fontSize: '18px', fontWeight: 600, margin: 0, color: 'var(--foreground, var(--dt-foreground))' }, children: `Memory #${activeMemory.id}` }),
                   renderBadge(activeMemory.category)
                 ]
               }),
@@ -821,7 +821,7 @@ function MemoryDetailColumn({
                 style: { display: 'flex', gap: '6px' },
                 children: [
                   jsx('button', { onClick: () => onEdit(activeMemory), style: S.btnAction, children: [jsx(Codicon, { name: 'edit', size: '0.8rem' }), ` ${t.edit}`] }),
-                  jsx('button', { onClick: () => onDelete(activeMemory.id), style: { ...S.btnAction, color: '#dc2626' }, children: [jsx(Codicon, { name: 'trash', size: '0.8rem' }), ` ${t.delete}`] })
+                  jsx('button', { onClick: () => onDelete(activeMemory.id), style: { ...S.btnAction, color: 'var(--ui-red)' }, children: [jsx(Codicon, { name: 'trash', size: '0.8rem' }), ` ${t.delete}`] })
                 ]
               })
             ]
@@ -829,11 +829,11 @@ function MemoryDetailColumn({
 
           // メタ情報バー
           jsxs('div', {
-            style: { display: 'flex', gap: '16px', padding: '10px 14px', backgroundColor: '#fafafa', borderRadius: '6px', fontSize: '11px', color: '#6b7280' },
+            style: { display: 'flex', gap: '16px', padding: '10px 14px', backgroundColor: 'var(--ui-bg-tertiary)', borderRadius: '6px', fontSize: '11px', color: 'var(--ui-text-secondary)' },
             children: [
-              jsxs('div', { children: [t.created, jsx('span', { style: { fontWeight: 500, color: '#111827' }, children: formatLocalTime(activeMemory.created_at) })] }),
-              jsxs('div', { children: [t.updated, jsx('span', { style: { fontWeight: 500, color: '#111827' }, children: formatLocalTime(activeMemory.updated_at) })] }),
-              jsxs('div', { children: [t.source, jsx('span', { style: { fontWeight: 500, color: '#111827' }, children: activeMemory.source || 'manual' })] })
+              jsxs('div', { children: [t.created, jsx('span', { style: { fontWeight: 500, color: 'var(--foreground, var(--dt-foreground))' }, children: formatLocalTime(activeMemory.created_at) })] }),
+              jsxs('div', { children: [t.updated, jsx('span', { style: { fontWeight: 500, color: 'var(--foreground, var(--dt-foreground))' }, children: formatLocalTime(activeMemory.updated_at) })] }),
+              jsxs('div', { children: [t.source, jsx('span', { style: { fontWeight: 500, color: 'var(--foreground, var(--dt-foreground))' }, children: activeMemory.source || 'manual' })] })
             ]
           }),
 
@@ -841,9 +841,9 @@ function MemoryDetailColumn({
           jsxs('div', {
             style: { ...S.flexCol, gap: '6px' },
             children: [
-              jsx('span', { style: { fontSize: '11px', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em' }, children: t.contentHeading }),
+              jsx('span', { style: { fontSize: '11px', fontWeight: 600, color: 'var(--ui-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }, children: t.contentHeading }),
               jsx('div', {
-                style: { padding: '14px 16px', backgroundColor: '#f9fafb', borderRadius: '8px', border: '1px solid #e5e7eb', fontSize: '13px', lineHeight: 1.6, color: '#111827', whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
+                style: { padding: '14px 16px', backgroundColor: 'var(--card, var(--dt-card))', borderRadius: '8px', border: '1px solid var(--ui-stroke-secondary)', fontSize: '13px', lineHeight: 1.6, color: 'var(--foreground, var(--dt-foreground))', whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
                 children: activeMemory.content
               })
             ]
@@ -851,7 +851,7 @@ function MemoryDetailColumn({
         ]
       })
     ) : (
-      jsx('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#9ca3af', fontSize: '12px' }, children: t.selectPrompt })
+      jsx('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--ui-text-tertiary)', fontSize: '12px' }, children: t.selectPrompt })
     )
   })
 }
@@ -881,15 +881,15 @@ function MemoryEditModal({
   if (!isOpen) return null
 
   return jsx('div', {
-    style: { position: 'fixed', inset: 0, backgroundColor: 'rgba(0, 0, 0, 0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: '16px' },
+    style: { position: 'fixed', inset: 0, backgroundColor: 'color-mix(in srgb, var(--ui-base) 40%, transparent)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: '16px' },
     children: jsxs('div', {
-      style: { width: '100%', maxWidth: '440px', backgroundColor: '#ffffff', borderRadius: '10px', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)', padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' },
+      style: { width: '100%', maxWidth: '440px', backgroundColor: 'var(--card, var(--dt-card))', borderRadius: '10px', boxShadow: 'var(--shadow-nous)', padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' },
       children: [
         jsxs('div', {
           style: S.flexBetween,
           children: [
-            jsx('h3', { style: { fontSize: '15px', fontWeight: 600, margin: 0, color: '#111827' }, children: editId ? t.editModalTitle(editId) : t.addModalTitle }),
-            jsx('button', { onClick: onClose, style: { background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', padding: 0 }, children: jsx(Codicon, { name: 'close', size: '1rem' }) })
+            jsx('h3', { style: { fontSize: '15px', fontWeight: 600, margin: 0, color: 'var(--foreground, var(--dt-foreground))' }, children: editId ? t.editModalTitle(editId) : t.addModalTitle }),
+            jsx('button', { onClick: onClose, style: { background: 'none', border: 'none', cursor: 'pointer', color: 'var(--ui-text-quaternary)', padding: 0 }, children: jsx(Codicon, { name: 'close', size: '1rem' }) })
           ]
         }),
         jsxs('form', {
@@ -899,7 +899,7 @@ function MemoryEditModal({
             jsxs('div', {
               style: { ...S.flexCol, gap: '4px' },
               children: [
-                jsx('label', { style: { fontSize: '11px', fontWeight: 500, color: '#374151' }, children: t.category }),
+                jsx('label', { style: { fontSize: '11px', fontWeight: 500, color: 'var(--ui-text-secondary)' }, children: t.category }),
                 jsx('select', {
                   value: formCategory,
                   onChange: (e) => setFormCategory(e.target.value),
@@ -916,7 +916,7 @@ function MemoryEditModal({
             jsxs('div', {
               style: { ...S.flexCol, gap: '4px' },
               children: [
-                jsx('label', { style: { fontSize: '11px', fontWeight: 500, color: '#374151' }, children: t.contentLabel }),
+                jsx('label', { style: { fontSize: '11px', fontWeight: 500, color: 'var(--ui-text-secondary)' }, children: t.contentLabel }),
                 jsx('textarea', {
                   rows: 5,
                   required: true,
@@ -928,7 +928,7 @@ function MemoryEditModal({
               ]
             }),
             jsxs('div', {
-              style: { display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8px', paddingTop: '6px', borderTop: '1px solid #e5e7eb' },
+              style: { display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8px', paddingTop: '6px', borderTop: '1px solid var(--ui-stroke-secondary)' },
               children: [
                 jsx('button', { type: 'button', onClick: onClose, style: S.btnAction, children: t.cancel }),
                 jsx('button', {
@@ -986,11 +986,11 @@ function MemoryManagementPage() {
           style: { display: 'flex', flex: 1, flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '24px', textAlign: 'center', gap: '8px' },
           children: [
             jsx('div', {
-              style: { fontSize: '13px', color: 'var(--foreground, #111827)', fontWeight: 500 },
+              style: { fontSize: '13px', color: 'var(--foreground, var(--dt-foreground))', fontWeight: 500 },
               children: message
             }),
             hint ? jsx('div', {
-              style: { fontSize: '12px', color: '#6b7280', maxWidth: '480px', lineHeight: 1.5 },
+              style: { fontSize: '12px', color: 'var(--ui-text-secondary)', maxWidth: '480px', lineHeight: 1.5 },
               children: hint
             }) : null,
             state.versionStatus !== 'checking' ? jsx('button', {

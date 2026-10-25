@@ -101,7 +101,7 @@ The interactive `hermes memory setup` wizard saves provider-specific values unde
 
 When `db_path` is omitted, the agent stores memories in `memory.db` under the active profile's Hermes home. An explicit `db_path` overrides this location; profiles configured with the same path share one database. For a named profile, the dashboard reads only that profile's `config.yaml` and falls back to its `memory.db`; it does not inherit `db_path` from the Hermes root config. The default/root profile continues to use the root `config.yaml`.
 
-When `auto_extract` is enabled, only the first non-empty line is checked. It must be an explicit leading remember request (for example, `Please remember that ...`, `remember: ...`, or `覚えておいて：...`) or a preference directive (for example, `今後は日本語で答えて`). Later lines and quoted or pasted examples are ignored. The captured text is stored as category `preference`. Use `sqlite_remember` for explicit, unambiguous storage.
+When `auto_extract` is enabled, only the first non-empty line is checked. It must be an explicit leading remember request (for example, `Please remember that ...`, `remember: ...`, or `覚えておいて：...`) or a preference directive (for example, `今後は日本語で答えて`). Later lines and quoted or pasted examples are ignored. The captured text is stored as category `preference`; an existing normalized equivalent in that category is not inserted again. Use `sqlite_remember` for explicit, unambiguous storage.
 
 Agent `sqlite_search` (default 5) and `sqlite_list_memories` (default 10) clamp `limit` to 1–100. Prefetch uses `max_recall`, clamped to 5–100: values below 5 become 5, and values above 100 become 100. A bool or other non-numeric value falls back to 5. A numeric value is truncated with `int()` before that clamp. Dashboard `GET /memories` defaults to 50 and accepts 1–200. The Desktop page requests 100.
 
@@ -116,12 +116,12 @@ Restart the gateway, and start a new agent session, so the provider and API relo
 | Tool | Description | Key Parameters |
 | :--- | :--- | :--- |
 | `sqlite_remember` | Stores a new fact, rule, or preference | `content` (required), `category` (default `general`) |
-| `sqlite_search` | Keyword search: FTS5 BM25, then LIKE if FTS returns nothing | `query` (required), `limit` (default 5, clamped to 1–100) |
+| `sqlite_search` | Keyword search: FTS5 BM25 plus Japanese substring matches ranked by longest fragment | `query` (required), `limit` (default 5, clamped to 1–100) |
 | `sqlite_forget` | Deletes a memory record by ID | `memory_id` (positive integer) |
 | `sqlite_list_memories` | Lists memories, newest `updated_at` first, with an optional category filter | `category` (optional), `limit` (default 10, clamped to 1–100) |
 | `sqlite_stats` | Returns memory count, category counts, last update time, database size, and WAL size | None |
 
-For queries without Japanese kana/kanji, `sqlite_search` drops tokens shorter than 2 characters and keeps at most 10 terms before the FTS query. Japanese kana/kanji runs are split into overlapping 2–4-character fragments (up to 500), taken across the whole run rather than only from the start. A LIKE fallback runs only when FTS returns no rows.
+For queries without Japanese kana/kanji, `sqlite_search` drops tokens shorter than 2 characters and keeps at most 10 terms before the FTS query. In queries containing Japanese kana/kanji, runs are split into overlapping 2–5-character fragments (up to 500), taken across the whole run rather than only from the start. Japanese substring matches run alongside FTS even when it finds English results, and are ranked by the longest matched fragment. For queries without Japanese, LIKE is used only when FTS returns no rows.
 
 ---
 
@@ -251,7 +251,7 @@ memory:
 
 `db_path` を省略すると、エージェントは現在のプロファイルの Hermes home 直下に `memory.db` を作ります。`db_path` を明示すると保存先が上書きされ、複数プロファイルのエージェント設定が同じパスなら同じ DB を共有します。名前付きプロファイルのダッシュボード API は、そのプロファイル自身の `config.yaml` だけを読み、`db_path` が無ければそのプロファイルの `memory.db` を使います。Hermes root の `config.yaml` にある `db_path` は引き継ぎません。default/root プロファイルでは引き続き root の `config.yaml` を使います。
 
-`auto_extract` を有効にすると、各発言の先頭の空でない1行だけを検査します。`Please remember that ...`、`remember: ...`、`覚えておいて：...` のような明示的な記憶指示、または `今後は日本語で答えて` のような応答設定指示に一致した場合だけ保存します。後続行や引用・貼り付けた例は対象外です。保存先は `preference` カテゴリです。確実に保存する場合は `sqlite_remember` を使用してください。
+`auto_extract` を有効にすると、各発言の先頭の空でない1行だけを検査します。`Please remember that ...`、`remember: ...`、`覚えておいて：...` のような明示的な記憶指示、または `今後は日本語で答えて` のような応答設定指示に一致した場合だけ保存します。後続行や引用・貼り付けた例は対象外です。保存先は `preference` カテゴリです。同カテゴリに正規化後の同一本文があれば、重複して追加しません。確実に保存する場合は `sqlite_remember` を使用してください。
 
 エージェントの `sqlite_search`（既定 5）と `sqlite_list_memories`（既定 10）は `limit` を 1〜100 に切り詰めます。Prefetch が使う `max_recall` は 5〜100 です。5 未満は 5、100 超は 100 になります。bool や数値でない値は 5 に戻り、数値は `int()` で切り捨ててからこの範囲に合わせます。ダッシュボードの `GET /memories` は既定 50、受け付ける範囲は 1〜200 です。Desktop 画面は 100 件を要求します。
 
@@ -266,12 +266,12 @@ memory:
 | ツール名 | 説明 | 主要引数 |
 | :--- | :--- | :--- |
 | `sqlite_remember` | 新しい事実や設定・ルールを記憶する | `content`（必須）, `category`（既定 `general`） |
-| `sqlite_search` | キーワード検索。FTS5 の BM25 のあと、0 件なら LIKE | `query`（必須）, `limit`（既定 5、1〜100） |
+| `sqlite_search` | キーワード検索。FTS5 に加え、日本語部分一致を最長断片で順位付け | `query`（必須）, `limit`（既定 5、1〜100） |
 | `sqlite_forget` | 不要な記憶を ID 指定で削除する | `memory_id`（正の整数） |
 | `sqlite_list_memories` | `updated_at` の新しい順に一覧する。カテゴリ絞り込み可 | `category`（任意）, `limit`（既定 10、1〜100） |
 | `sqlite_stats` | 記憶件数・カテゴリ別件数・最終更新日時・DB本体サイズ・WALサイズを返す | なし |
 
-仮名・漢字を含まない検索では、`sqlite_search` は 2 文字未満の語を捨て、FTS に最大 10 語を渡します。日本語の仮名・漢字の連続部分は、重複する 2〜4 文字の断片（最大 500 個）に分けます。長い文でも先頭だけで切らず、文全体から取ります。LIKE へのフォールバックは FTS が 0 件のときだけです。
+仮名・漢字を含まない検索では、`sqlite_search` は 2 文字未満の語を捨て、FTS に最大 10 語を渡します。仮名・漢字を含むクエリでは、日本語の連続部分を重複する 2〜5 文字の断片（最大 500 個）に分けます。長い文でも先頭だけで切らず、文全体から取ります。日本語を含むクエリでは、FTS の結果有無にかかわらず日本語部分一致も検索し、最長一致断片で順位付けします。日本語を含まない検索だけ、FTS が 0 件の場合に LIKE へフォールバックします。
 
 ---
 
