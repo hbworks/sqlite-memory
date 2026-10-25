@@ -242,6 +242,9 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
             spec.loader.exec_module(module)
 
         fields_by_key = {field.key: field for field in module.CONFIG_SCHEMA.fields}
+        self.assertEqual(module.CONFIG_SCHEMA.label, "Persistent Memory (SQLite)")
+        self.assertIn("first non-empty line", module.CONFIG_SCHEMA.fields[1].description)
+        self.assertIn("preference", module.CONFIG_SCHEMA.fields[1].description)
         self.assertEqual(fields_by_key["db_path"].default, "")
         self.assertIn("leave blank", fields_by_key["db_path"].description.lower())
         self.assertEqual(fields_by_key["max_recall"].minimum, 5)

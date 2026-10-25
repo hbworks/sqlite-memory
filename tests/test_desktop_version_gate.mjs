@@ -121,6 +121,14 @@ test('desktop UI version matches the package and dashboard manifests', () => {
   assert.equal(desktopVersion, dashboardManifest.version)
 })
 
+test('product name is shared and navigation stays short', () => {
+  const productName = pluginManifest.match(/^label:\s*(.+)$/m)?.[1]
+  assert.equal(productName, 'Persistent Memory (SQLite)')
+  assert.match(pluginSource, /name:\s*'Persistent Memory \(SQLite\)'/)
+  assert.match(pluginSource, /label:\s*'Memory'/)
+  assert.equal(dashboardManifest.label, 'Memory')
+})
+
 test('only an exact profile plugin version is compatible', () => {
   const isCompatible = loadVersionCompatibility()
 

@@ -32,16 +32,15 @@ test('forwards the selected profile to the Electron API backend route', async ()
   assert.equal(request.profile, 'coding')
 })
 
-test('forwards the selected profile when retrying the compatibility route', async () => {
+test('does not call an unmounted compatibility API path', async () => {
   const requests = []
   const api = loadApi(async request => {
     requests.push(request)
-    if (requests.length === 1) throw new Error('404')
-    return { total_memories: 2 }
+    throw new Error('404')
   })
 
-  await api('/stats?profile=coding')
+  await assert.rejects(() => api('/stats?profile=coding'), /404/)
 
-  assert.equal(requests[1].path, '/api/plugins/sqlite_memory/stats?profile=coding')
-  assert.deepEqual(requests.map(request => request.profile), ['coding', 'coding'])
+  assert.deepEqual(requests.map(request => request.path), ['/api/plugins/sqlite-memory/stats?profile=coding'])
+  assert.equal(requests[0].profile, 'coding')
 })

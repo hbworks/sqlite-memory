@@ -277,7 +277,7 @@ class SQLiteMemoryProvider(MemoryProvider):
                 },
                 {
                     "key": "auto_extract",
-                    "description": "Auto extract rules/preferences",
+                    "description": "Save only an explicit leading remember directive, as preference",
                     "default": "true",
                     "secret": False,
                     "choices": ["true", "false"],

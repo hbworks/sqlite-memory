@@ -1,6 +1,6 @@
 """SQLite Memory Plugin — Backend API Routes for Hermes Desktop & Dashboard.
 
-Mounted at /api/plugins/sqlite-memory/ (and /api/plugins/sqlite_memory/ for backwards compatibility)
+Mounted at /api/plugins/sqlite-memory/. The host does not mount /api/plugins/sqlite_memory/.
 """
 
 from __future__ import annotations

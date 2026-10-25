@@ -10,7 +10,7 @@ from plugins.memory.config_schema import (
 
 CONFIG_SCHEMA = ProviderConfigSchema(
     name="sqlite-memory",
-    label="SQLite Persistent Memory",
+    label="Persistent Memory (SQLite)",
     fields=(
         ProviderField(
             key="db_path",
@@ -28,7 +28,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
             label="Auto Extract",
             kind=KIND_BOOL,
             default="true",
-            description="Automatically extract rules and preferences from conversation turns.",
+            description="Save only an explicit English or Japanese remember directive on the first non-empty line, as category preference.",
             inline=True,
         ),
         ProviderField(

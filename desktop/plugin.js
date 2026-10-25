@@ -1,5 +1,5 @@
 /**
- * SQLite Persistent Memory — Official Hermes Desktop UI Style
+ * Persistent Memory (SQLite) — Hermes Desktop UI
  *
  * Implements a clean, 2-column master-detail layout consistent with
  * Hermes official Settings, Toolsets, and Messaging pages.
@@ -60,27 +60,13 @@ async function api(path, options = {}) {
     }
     const method = options.method || 'GET'
 
-    // まず /api/plugins/sqlite-memory を試行
-    try {
-      return await window.hermesDesktop.api({
-        path: `/api/plugins/sqlite-memory${cleanPath}`,
-        method,
-        body,
-        ...profileScope
-      })
-    } catch (err1) {
-      // 404等の場合は互換エンドポイント /api/plugins/sqlite_memory を試行
-      try {
-        return await window.hermesDesktop.api({
-          path: `/api/plugins/sqlite_memory${cleanPath}`,
-          method,
-          body,
-          ...profileScope
-        })
-      } catch (err2) {
-        throw err1
-      }
-    }
+    // The host mounts this plugin name only. sqlite_memory is a config key, not an API path.
+    return await window.hermesDesktop.api({
+      path: `/api/plugins/sqlite-memory${cleanPath}`,
+      method,
+      body,
+      ...profileScope
+    })
   }
 
   // 2. SDK の ctx.rest が利用可能な場合
@@ -965,7 +951,7 @@ function MemoryEditModal({
 // =============================================================================
 
 /**
- * SQLite Persistent Memory 管理ページメインコンポーネント
+ * Persistent Memory (SQLite) 管理ページ
  */
 function MemoryManagementPage() {
   const state = useMemoryState()
@@ -1088,7 +1074,7 @@ function MemoryManagementPage() {
 
 export default {
   id: 'sqlite-memory',
-  name: 'Persistent Memory',
+  name: 'Persistent Memory (SQLite)',
   description: 'SQLite-backed persistent long-term memory browser and manager.',
   defaultEnabled: true,
   register(ctx) {
