@@ -28,7 +28,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
             label="Auto Extract",
             kind=KIND_BOOL,
             default="true",
-            description="Save only an explicit English or Japanese remember directive on the first non-empty line, as category preference.",
+            description="Save explicit English/Japanese remember requests and reply preferences from the first non-empty line as category preference.",
             inline=True,
         ),
         ProviderField(

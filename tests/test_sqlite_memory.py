@@ -116,6 +116,103 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
         self.assertFalse(provider._auto_extract)
         self.assertEqual(provider._max_recall, 7)
 
+    def test_save_config_round_trips_provider_settings_through_config_yaml(self):
+        import copy
+        import types
+        from unittest.mock import patch
+
+        profile_home = Path(self.tmpdir) / "profile"
+        custom_path = Path(self.tmpdir) / "custom.db"
+        config = {
+            "model": "test/model",
+            "memory": {
+                "provider": "sqlite-memory",
+                "other-provider": {"setting": "preserve"},
+                "sqlite_memory": {"max_recall": 9},
+            },
+        }
+        saved_configs = []
+        home_state = {"value": "previous-home"}
+
+        def cfg_get(data, *keys, default=None):
+            value = data
+            for key in keys:
+                if not isinstance(value, dict) or key not in value:
+                    return default
+                value = value[key]
+            return value
+
+        def save_config(updated):
+            snapshot = copy.deepcopy(updated)
+            config.clear()
+            config.update(snapshot)
+            saved_configs.append((home_state["value"], copy.deepcopy(snapshot)))
+
+        def set_home(path):
+            previous = home_state["value"]
+            home_state["value"] = str(path)
+            return previous
+
+        def reset_home(previous):
+            home_state["value"] = previous
+
+        hermes_cli = types.ModuleType("hermes_cli")
+        hermes_cli.__path__ = []
+        config_module = types.ModuleType("hermes_cli.config")
+        config_module.cfg_get = cfg_get
+        config_module.load_config = lambda: config
+        config_module.save_config = save_config
+        hermes_constants = types.ModuleType("hermes_constants")
+        hermes_constants.set_hermes_home_override = set_home
+        hermes_constants.reset_hermes_home_override = reset_home
+
+        provider = SQLiteMemoryProvider()
+        with patch.dict(
+            sys.modules,
+            {
+                "hermes_cli": hermes_cli,
+                "hermes_cli.config": config_module,
+                "hermes_constants": hermes_constants,
+            },
+        ):
+            save_method = getattr(provider, "save_config", None)
+            self.assertTrue(callable(save_method))
+            save_method(
+                {"max_recall": "20", "auto_extract": "false"},
+                str(profile_home),
+            )
+            config["memory"]["sqlite-memory"]["unrelated"] = "preserve"
+            save_method({"db_path": str(custom_path)}, str(profile_home))
+            provider.initialize(
+                session_id="save-config-test", hermes_home=str(profile_home)
+            )
+
+        self.assertEqual(len(saved_configs), 2)
+        self.assertEqual(saved_configs[0][0], str(profile_home))
+        self.assertEqual(saved_configs[0][1]["memory"]["sqlite-memory"], {
+            "max_recall": "20",
+            "auto_extract": "false",
+        })
+        self.assertEqual(saved_configs[1][0], str(profile_home))
+        self.assertEqual(config["memory"]["provider"], "sqlite-memory")
+        self.assertEqual(config["memory"]["other-provider"], {"setting": "preserve"})
+        self.assertEqual(
+            config["memory"]["sqlite-memory"],
+            {
+                "db_path": str(custom_path),
+                "max_recall": "20",
+                "unrelated": "preserve",
+                "auto_extract": "false",
+            },
+        )
+        self.assertEqual(config["memory"]["sqlite_memory"], {"max_recall": 9})
+        self.assertEqual(config["model"], "test/model")
+        self.assertEqual(home_state["value"], "previous-home")
+        self.assertEqual(provider._db_path, custom_path)
+        self.assertEqual(provider._max_recall, 20)
+        self.assertFalse(provider._auto_extract)
+        self.assertFalse((profile_home / "sqlite-memory" / "config.json").exists())
+
     def test_initialize_invalid_max_recall_does_not_retain_previous_value(self):
         configured_path = Path(self.tmpdir) / "custom.db"
         config = {
@@ -494,6 +591,38 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
         self.provider.sync_turn("私の好みを覚えておいて：ダークテーマを優先すること", "承知いたしました。")
         all_pref = self.provider.list_memories(category="preference")
         self.assertEqual(len(all_pref), 2)
+
+    def test_auto_extract_japanese_remember_without_leading_subject(self):
+        content = "私はXboxが好き"
+
+        self.provider.sync_turn(f"覚えておいて：{content}", "")
+
+        memories = self.provider.list_memories(category="preference")
+        self.assertEqual([memory["content"] for memory in memories], [content])
+
+    def test_auto_extract_japanese_remember_with_comma(self):
+        content = "バックアップにはWALも含める"
+
+        self.provider.sync_turn(f"覚えておいて、{content}", "")
+
+        memories = self.provider.list_memories(category="preference")
+        self.assertEqual([memory["content"] for memory in memories], [content])
+
+    def test_auto_extract_english_remember_with_colon(self):
+        content = "Use short responses"
+
+        self.provider.sync_turn(f"remember: {content}", "")
+
+        memories = self.provider.list_memories(category="preference")
+        self.assertEqual([memory["content"] for memory in memories], [content])
+
+    def test_auto_extract_japanese_answering_preference(self):
+        content = "日本語で答えて"
+
+        self.provider.sync_turn(f"今後は{content}", "")
+
+        memories = self.provider.list_memories(category="preference")
+        self.assertEqual([memory["content"] for memory in memories], [content])
 
     def test_auto_extract_ignores_incidental_remember_in_markdown_table(self):
         """A `remember` mention in pasted table text is not a memory request."""
@@ -933,6 +1062,68 @@ memory:
             resolved = _read_config_db_path(cfg)
 
         self.assertEqual(resolved, Path("/tmp/custom_hyphen.db"))
+
+    def test_named_profile_does_not_fall_back_to_root_db_path(self):
+        """A named profile without db_path must use its own memory.db, not the root's shared path."""
+        import asyncio
+        from dashboard.plugin_api import _get_db_path, get_stats
+
+        old_values = {
+            key: os.environ.get(key)
+            for key in ("HOME", "HERMES_HOME", "HERMES_PROFILE")
+        }
+        try:
+            home = Path(self.tmpdir) / "home"
+            root = home / ".hermes"
+            profile_dir = root / "profiles" / "assistant"
+            profile_dir.mkdir(parents=True)
+            (root / "config.yaml").write_text(
+                "memory:\n  sqlite-memory:\n    db_path: /tmp/root-shared.db\n",
+                encoding="utf-8",
+            )
+            (profile_dir / "config.yaml").write_text(
+                "memory:\n  provider: sqlite-memory\n  sqlite-memory:\n    auto_extract: true\n",
+                encoding="utf-8",
+            )
+            os.environ["HOME"] = str(home)
+            os.environ.pop("HERMES_HOME", None)
+            os.environ.pop("HERMES_PROFILE", None)
+            root_db = root / "root-shared.db"
+            (root / "config.yaml").write_text(
+                f"memory:\n  sqlite-memory:\n    db_path: {root_db}\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                _get_db_path("assistant"), profile_dir / "memory.db"
+            )
+            self.assertEqual(_get_db_path("default"), root_db)
+            stats = asyncio.run(get_stats(profile="assistant"))
+            self.assertEqual(Path(stats["db_path"]), profile_dir / "memory.db")
+
+            os.environ["HERMES_PROFILE"] = "assistant"
+            self.assertEqual(_get_db_path(), profile_dir / "memory.db")
+
+            os.environ.pop("HERMES_PROFILE", None)
+            (root / "active_profile").write_text("assistant", encoding="utf-8")
+            self.assertEqual(_get_db_path(), profile_dir / "memory.db")
+
+            os.environ["HERMES_HOME"] = str(profile_dir)
+            self.assertEqual(_get_db_path(), profile_dir / "memory.db")
+
+            profile_db = profile_dir / "custom.db"
+            (profile_dir / "config.yaml").write_text(
+                f"memory:\n  sqlite-memory:\n    db_path: {profile_db}\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(_get_db_path("assistant"), profile_db)
+            self.assertEqual(_get_db_path(), profile_db)
+        finally:
+            for key, value in old_values.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
     def test_config_db_path_prefers_hyphen_when_both_notations_are_present(self):
         """The canonical hyphenated setting must win when both keys define a path."""

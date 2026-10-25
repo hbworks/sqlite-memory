@@ -215,7 +215,7 @@ def _get_db_path(profile: Optional[str] = None) -> Path:
     # 2. 特定プロファイルが明示指定された場合
     if prof:
         prof_dir = _validated_profile_dir(root, prof)
-        cfg_path = _read_config_db_path(prof_dir / "config.yaml") or _read_config_db_path(root / "config.yaml")
+        cfg_path = _read_config_db_path(prof_dir / "config.yaml")
         if cfg_path:
             return cfg_path
 
@@ -224,7 +224,7 @@ def _get_db_path(profile: Optional[str] = None) -> Path:
     # 3. 未指定の場合（HERMES_HOME、HERMES_PROFILE、active_profile、または root）
     if "HERMES_HOME" in os.environ and os.environ["HERMES_HOME"].strip():
         h_home = Path(os.path.expanduser(os.environ["HERMES_HOME"].strip()))
-        cfg_path = _read_config_db_path(h_home / "config.yaml") or _read_config_db_path(root / "config.yaml")
+        cfg_path = _read_config_db_path(h_home / "config.yaml")
         return cfg_path if cfg_path else h_home / "memory.db"
 
     # アクティブプロファイルの自動検出フォールバック（Agent本体側の動作と整合）
@@ -236,7 +236,7 @@ def _get_db_path(profile: Optional[str] = None) -> Path:
             return cfg_path if cfg_path else root / "memory.db"
         prof_dir = _validated_profile_dir(root, prof_env)
         if prof_dir.is_dir():
-            cfg_path = _read_config_db_path(prof_dir / "config.yaml") or _read_config_db_path(root / "config.yaml")
+            cfg_path = _read_config_db_path(prof_dir / "config.yaml")
             return cfg_path if cfg_path else _validated_profile_db_path(root, prof_dir)
 
     active_name = ""
@@ -252,7 +252,7 @@ def _get_db_path(profile: Optional[str] = None) -> Path:
         if active_name not in _ROOT_PROFILE_ALIASES:
             prof_dir = _validated_profile_dir(root, active_name)
             if prof_dir.is_dir():
-                cfg_path = _read_config_db_path(prof_dir / "config.yaml") or _read_config_db_path(root / "config.yaml")
+                cfg_path = _read_config_db_path(prof_dir / "config.yaml")
                 return cfg_path if cfg_path else _validated_profile_db_path(root, prof_dir)
 
     cfg_path = _read_config_db_path(root / "config.yaml")

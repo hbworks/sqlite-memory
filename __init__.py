@@ -278,7 +278,7 @@ class SQLiteMemoryProvider(MemoryProvider):
                 },
                 {
                     "key": "auto_extract",
-                    "description": "Save only an explicit leading remember directive, as preference",
+                    "description": "Save an explicit leading remember request or reply preference as preference",
                     "default": "true",
                     "secret": False,
                     "choices": ["true", "false"],
@@ -293,6 +293,36 @@ class SQLiteMemoryProvider(MemoryProvider):
                     "step": 1,
                 },
             ]
+
+    def save_config(self, values: Dict[str, Any], hermes_home: str) -> None:
+        """Persist provider settings in the active profile's config.yaml section."""
+        from hermes_cli.config import load_config, save_config as write_config
+        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+        home_token = (
+            set_hermes_home_override(hermes_home) if hermes_home else None
+        )
+        try:
+            config = load_config()
+            if not isinstance(config, dict):
+                config = {}
+
+            memory_config = config.get("memory")
+            if not isinstance(memory_config, dict):
+                memory_config = config["memory"] = {}
+
+            current = memory_config.get(self.name)
+            current = current if isinstance(current, dict) else {}
+            allowed_keys = {"db_path", "auto_extract", "max_recall"}
+            updates = {key: value for key, value in values.items() if key in allowed_keys}
+            if not updates:
+                return
+
+            memory_config[self.name] = {**current, **updates}
+            write_config(config)
+        finally:
+            if home_token is not None:
+                reset_hermes_home_override(home_token)
 
     def _get_connection(self) -> sqlite3.Connection:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -592,9 +622,9 @@ class SQLiteMemoryProvider(MemoryProvider):
         directive_line = text.splitlines()[0].strip()
 
         explicit_patterns = [
-            r"(?:(?:please\s+)?remember\s+(?:that|to)?\s*:?\s*)(.+)",
-            r"(?:(?:これ|以下|次|私の好みを?)\s*覚えて(?:おいて|ください|ね)?\s*[:：]?\s*)(.+)",
-            r"(?:(?:今後|次回から|これからは)\s*(.+)(?:にして|を使って|でやって))",
+            r"(?:(?:please\s+)?remember(?:\s+(?:that|to))?(?:\s*[:：,，]\s*|\s+))(.+)",
+            r"(?:(?:これ(?:を)?|以下(?:を)?|次|私の好みを?)\s*)?覚えて(?:おいて|ください|ね)?(?:\s*[:：,，、]\s*|\s+)(.+)",
+            r"(?:今後(?:は)?|次回から(?:は)?|これからは)\s*(.+(?:にして|を使って|でやって|で答えて(?:ください)?))",
         ]
         for pat in explicit_patterns:
             m = re.fullmatch(pat, directive_line, re.IGNORECASE)

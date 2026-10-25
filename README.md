@@ -97,9 +97,11 @@ memory:
 
 The provider reads these settings from `config.yaml` only. The Desktop memory-provider settings panel writes `<hermes_home>/sqlite-memory/config.json`. It may set `memory.provider` in `config.yaml`, but it does not copy `db_path`, `auto_extract`, or `max_recall` there. Those panel edits do not change agent behavior.
 
-When `db_path` is omitted, the agent stores memories in `memory.db` under the active profile's Hermes home. An explicit `db_path` overrides this location; profiles configured with the same path share one database. The dashboard API is different for a named profile: if that profile's config has no `db_path`, it checks the Hermes root's `config.yaml` (`~/.hermes/config.yaml` by default; when `HERMES_HOME` is set, the root is resolved from it) before falling back to the profile `memory.db`. The agent does not do that fallback.
+The interactive `hermes memory setup` wizard saves provider-specific values under `memory.sqlite-memory` in `config.yaml`.
 
-When `auto_extract` is enabled, only the first non-empty line of a user message is checked, and the entire line must match an explicit English or Japanese memory directive (for example, `Please remember that ...`). Trigger phrases in later lines or pasted examples are ignored. The captured text is stored as category `preference`. Use `sqlite_remember` for explicit, unambiguous storage.
+When `db_path` is omitted, the agent stores memories in `memory.db` under the active profile's Hermes home. An explicit `db_path` overrides this location; profiles configured with the same path share one database. For a named profile, the dashboard reads only that profile's `config.yaml` and falls back to its `memory.db`; it does not inherit `db_path` from the Hermes root config. The default/root profile continues to use the root `config.yaml`.
+
+When `auto_extract` is enabled, only the first non-empty line is checked. It must be an explicit leading remember request (for example, `Please remember that ...`, `remember: ...`, or `覚えておいて：...`) or a preference directive (for example, `今後は日本語で答えて`). Later lines and quoted or pasted examples are ignored. The captured text is stored as category `preference`. Use `sqlite_remember` for explicit, unambiguous storage.
 
 Agent `sqlite_search` (default 5) and `sqlite_list_memories` (default 10) clamp `limit` to 1–100. Prefetch uses `max_recall`, clamped to 5–100: values below 5 become 5, and values above 100 become 100. A bool or other non-numeric value falls back to 5. A numeric value is truncated with `int()` before that clamp. Dashboard `GET /memories` defaults to 50 and accepts 1–200. The Desktop page requests 100.
 
@@ -127,7 +129,7 @@ For queries without Japanese kana/kanji, `sqlite_search` drops tokens shorter th
 
 By default, the agent stores memories in `memory.db` under the active profile's Hermes home. On the standard Unix layout, the default profile uses `~/.hermes/memory.db`, while a named profile uses `~/.hermes/profiles/<profile>/memory.db`. If `HERMES_HOME` is configured, use that profile's configured home. Connections use WAL, so `<db>-wal` and `<db>-shm` may sit beside the database.
 
-Set `db_path` in that profile's `config.yaml` to use a custom location. Profiles whose agent config names the same path share one database. See the dashboard fallback above before assuming a named profile's API is looking at that profile's `memory.db`.
+Set `db_path` in that profile's `config.yaml` to use a custom location. Profiles whose agent config names the same path share one database. The dashboard follows the same profile-local rule: a named profile uses only its own `config.yaml`, then its own `memory.db` if `db_path` is absent.
 
 ```bash
 # Default-profile example. For a named profile, point DB_PATH at that profile's Hermes home.
@@ -245,9 +247,11 @@ memory:
 
 プロバイダが読むのは `config.yaml` だけです。Desktop のメモリプロバイダ設定パネルは `<hermes_home>/sqlite-memory/config.json` に書きます。`config.yaml` の `memory.provider` は更新することがありますが、`db_path`、`auto_extract`、`max_recall` はコピーしません。これらのパネル編集はエージェントの動作に反映されません。
 
-`db_path` を省略すると、エージェントは現在のプロファイルの Hermes home 直下に `memory.db` を作ります。`db_path` を明示すると保存先が上書きされ、複数プロファイルのエージェント設定が同じパスなら同じ DB を共有します。ダッシュボード API は名前付きプロファイルでは違います。そのプロファイルの config に `db_path` が無い場合、Hermes root の `config.yaml`（既定では `~/.hermes/config.yaml`。`HERMES_HOME` 設定時はそこから root が解決されます）の `db_path` を、プロファイルの `memory.db` より先に参照します。エージェントはこのフォールバックをしません。
+対話型の `hermes memory setup` は、プロバイダ固有の値を `config.yaml` の `memory.sqlite-memory` に保存します。
 
-`auto_extract` を有効にしても、各ユーザー発言の先頭の空でない1行だけを検査し、その行全体が英語または日本語の明示的な記憶指示に一致した場合に限り保存します。後続行の引用や貼り付けた例に含まれる語句は抽出されません。保存されるのはキャプチャした本文で、カテゴリは `preference` です。確実に保存する場合は `sqlite_remember` を使用してください。
+`db_path` を省略すると、エージェントは現在のプロファイルの Hermes home 直下に `memory.db` を作ります。`db_path` を明示すると保存先が上書きされ、複数プロファイルのエージェント設定が同じパスなら同じ DB を共有します。名前付きプロファイルのダッシュボード API は、そのプロファイル自身の `config.yaml` だけを読み、`db_path` が無ければそのプロファイルの `memory.db` を使います。Hermes root の `config.yaml` にある `db_path` は引き継ぎません。default/root プロファイルでは引き続き root の `config.yaml` を使います。
+
+`auto_extract` を有効にすると、各発言の先頭の空でない1行だけを検査します。`Please remember that ...`、`remember: ...`、`覚えておいて：...` のような明示的な記憶指示、または `今後は日本語で答えて` のような応答設定指示に一致した場合だけ保存します。後続行や引用・貼り付けた例は対象外です。保存先は `preference` カテゴリです。確実に保存する場合は `sqlite_remember` を使用してください。
 
 エージェントの `sqlite_search`（既定 5）と `sqlite_list_memories`（既定 10）は `limit` を 1〜100 に切り詰めます。Prefetch が使う `max_recall` は 5〜100 です。5 未満は 5、100 超は 100 になります。bool や数値でない値は 5 に戻り、数値は `int()` で切り捨ててからこの範囲に合わせます。ダッシュボードの `GET /memories` は既定 50、受け付ける範囲は 1〜200 です。Desktop 画面は 100 件を要求します。
 
@@ -275,7 +279,7 @@ memory:
 
 エージェントはデフォルトで、現在のプロファイルの Hermes home 直下にある `memory.db` に保存します。標準的な Unix 配置では、default プロファイルは `~/.hermes/memory.db`、名前付きプロファイルは `~/.hermes/profiles/<profile>/memory.db` です。`HERMES_HOME` を設定している場合は、そのプロファイルの Hermes home を使用してください。接続は WAL なので、データベースの隣に `<db>-wal` と `<db>-shm` ができることがあります。
 
-カスタムの保存先にするには、そのプロファイルの `config.yaml` に `db_path` を書きます。エージェント設定が同じパスのプロファイルは DB を共有します。名前付きプロファイルの API がプロファイル自身の `memory.db` を見ているとは限らないので、上のダッシュボードのフォールバックも確認してください。
+カスタムの保存先にするには、そのプロファイルの `config.yaml` に `db_path` を書きます。エージェント設定が同じパスのプロファイルは DB を共有します。ダッシュボードも同じプロファイル内の設定を使い、`db_path` が無ければそのプロファイル自身の `memory.db` にフォールバックします。
 
 ```bash
 # default プロファイルの例。名前付きプロファイルでは DB_PATH をその Hermes home に変更してください。
