@@ -927,13 +927,27 @@ function MemoryManagementPage() {
         ? t.versionMismatch(DESKTOP_PLUGIN_VERSION, state.pluginVersion || t.unknownVersion)
         : t.versionUnavailable
 
-    return jsx('div', {
+    return jsxs('div', {
       ref: state.containerRef,
-      style: { ...S.page, alignItems: 'center', justifyContent: 'center', padding: '24px', textAlign: 'center' },
-      children: jsx('div', {
-        style: { fontSize: '13px', color: 'var(--foreground, #111827)' },
-        children: message
-      })
+      style: S.page,
+      children: [
+        // Keep the profile selector available so users can switch to a compatible backend.
+        jsx(MemorySubBar, {
+          selectedProfile: state.selectedProfile,
+          onSelectProfile: state.handleSelectProfile,
+          availableProfiles: state.availableProfiles,
+          dbPath: state.dbPath,
+          total: state.total,
+          onReload: state.reloadAll
+        }),
+        jsx('div', {
+          style: { display: 'flex', flex: 1, alignItems: 'center', justifyContent: 'center', padding: '24px', textAlign: 'center' },
+          children: jsx('div', {
+            style: { fontSize: '13px', color: 'var(--foreground, #111827)' },
+            children: message
+          })
+        })
+      ]
     })
   }
 

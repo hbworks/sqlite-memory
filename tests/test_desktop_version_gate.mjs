@@ -121,6 +121,7 @@ test('shows a version warning instead of memory UI for a mismatched profile', ()
   assert.ok(rendered.text.join('').includes('バージョンが違います'))
   assert.ok(rendered.text.join('').includes('9.8.7'))
   assert.ok(!rendered.types.includes('MemoryTopHeader'))
+  assert.ok(rendered.types.includes('MemorySubBar'), 'profile selector remains available during a version mismatch')
 })
 
 test('renders memory UI when the selected profile version matches', () => {
