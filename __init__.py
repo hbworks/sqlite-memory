@@ -15,7 +15,7 @@ import threading
 import unicodedata
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Dict, Generator, List, Optional
+from typing import Any, Callable, Dict, Generator, List, Optional, Set
 
 try:
     from .memory_stats import collect_memory_stats
@@ -44,6 +44,7 @@ logger = logging.getLogger(__name__)
 MIN_QUERY_LEN = 2
 MAX_RECALL_RESULTS = 5
 MAX_MEMORY_RESULTS = 100
+MAX_JAPANESE_SEARCH_TERMS = 200
 INDICATOR_GLYPH = "💾"
 
 # --- Tool Schemas ---
@@ -400,10 +401,73 @@ class SQLiteMemoryProvider(MemoryProvider):
             glyph=INDICATOR_GLYPH,
         )
 
-    def _sanitize_fts_query(self, query: str) -> str:
+    @staticmethod
+    def _is_japanese_char(char: str) -> bool:
+        codepoint = ord(char)
+        return (
+            0x3040 <= codepoint <= 0x30FA
+            or 0x30FC <= codepoint <= 0x30FF
+            or 0x3400 <= codepoint <= 0x4DBF
+            or 0x4E00 <= codepoint <= 0x9FFF
+            or 0xF900 <= codepoint <= 0xFAFF
+            or 0xFF66 <= codepoint <= 0xFF9F
+            or 0x20000 <= codepoint <= 0x323AF
+            or char in "々〆〇〻"
+        )
+
+    @classmethod
+    def _contains_japanese(cls, text: str) -> bool:
+        return any(cls._is_japanese_char(char) for char in text)
+
+    @staticmethod
+    def _extend_search_terms(
+        terms: List[str], seen_terms: Set[str], text: str, is_japanese: bool
+    ) -> None:
+        if is_japanese:
+            max_size = min(6, len(text))
+            for size in range(max_size, 1, -1):
+                for start in range(len(text) - size + 1):
+                    term = text[start:start + size]
+                    if term in seen_terms:
+                        continue
+                    seen_terms.add(term)
+                    terms.append(term)
+                    if len(terms) >= MAX_JAPANESE_SEARCH_TERMS:
+                        return
+        elif len(text) >= 2 and text not in seen_terms:
+            seen_terms.add(text)
+            terms.append(text)
+
+    def _search_terms(self, query: str) -> List[str]:
         clean = re.sub(r'[^\w\s\u3000-\u303f\u3040-\u309f\u30a0-\u30ff\uff00-\uff9f\u4e00-\u9faf]', ' ', query)
-        terms = [t.strip() for t in clean.split() if len(t.strip()) >= 2]
-        return " OR ".join(f'"{t}"' for t in terms[:10]) if terms else ""
+        terms: List[str] = []
+        seen_terms: Set[str] = set()
+        for token in clean.split():
+            run_start = 0
+            run_is_japanese = self._is_japanese_char(token[0])
+            for index, char in enumerate(token[1:], start=1):
+                is_japanese = self._is_japanese_char(char)
+                if is_japanese != run_is_japanese:
+                    self._extend_search_terms(
+                        terms, seen_terms, token[run_start:index], run_is_japanese
+                    )
+                    if len(terms) >= MAX_JAPANESE_SEARCH_TERMS:
+                        return terms
+                    run_start = index
+                    run_is_japanese = is_japanese
+            self._extend_search_terms(
+                terms, seen_terms, token[run_start:], run_is_japanese
+            )
+            if len(terms) >= MAX_JAPANESE_SEARCH_TERMS:
+                return terms
+
+        return terms
+
+    def _sanitize_fts_query(self, query: str) -> str:
+        terms = self._search_terms(query)
+        max_terms = MAX_JAPANESE_SEARCH_TERMS if self._contains_japanese(query) else 10
+        terms = terms[:max_terms]
+        return " OR ".join(f'"{term}"' for term in terms) if terms else ""
 
     def search_memories(self, query: str, limit: int = 5, category: Optional[str] = None) -> List[Dict[str, Any]]:
         """Search memories using FTS5 with fallback to LIKE search."""
@@ -431,7 +495,14 @@ class SQLiteMemoryProvider(MemoryProvider):
 
             # Fallback to LIKE search if FTS returned nothing
             if not rows and query.strip():
-                keywords = [k.strip() for k in query.split() if len(k.strip()) >= 2][:3]
+                if self._contains_japanese(query):
+                    keywords = self._search_terms(query)[:MAX_JAPANESE_SEARCH_TERMS]
+                else:
+                    keywords = [
+                        keyword.strip()
+                        for keyword in query.split()
+                        if len(keyword.strip()) >= 2
+                    ][:3]
                 if keywords:
                     where = " OR ".join(["m.content LIKE ?" for _ in keywords])
                     sql = f"SELECT id, category, content, created_at FROM memories m WHERE ({where})"

@@ -461,6 +461,28 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
         self.assertIn("## Relevant Long-Term Memories (from SQLite)", block)
         self.assertIn("Always reply in Japanese", block)
 
+    def test_prefetch_matches_japanese_substring_in_unspaced_query(self):
+        content = "ユーザーはデータ主権を重視する"
+        self.provider.add_memory(content, category="preference")
+
+        self.assertEqual(
+            [row["content"] for row in self.provider.search_memories("データ主権")],
+            [content],
+        )
+
+        block = self.provider.prefetch("データ主権の観点でこの設計をレビューして")
+
+        self.assertIn(content, block)
+
+    def test_japanese_search_terms_are_bounded(self):
+        query = "".join(chr(0x4E00 + index) for index in range(300))
+
+        terms = self.provider._search_terms(query)
+
+        self.assertEqual(
+            len(terms), sqlite_memory_module.MAX_JAPANESE_SEARCH_TERMS
+        )
+
     def test_auto_extract_preference(self):
         """Should automatically extract explicit rules from conversation turns."""
         self.provider.sync_turn("Please remember that my favorite color is navy blue", "Understood.")
