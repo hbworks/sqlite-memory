@@ -165,7 +165,8 @@ const t = {
   deleteError: (m) => getLocale() === 'ja' ? `削除エラー: ${m}` : `Delete error: ${m}`,
   get defaultProfileLabel() { return getLocale() === 'ja' ? 'デフォルト (~/.hermes)' : 'Default (~/.hermes)' },
   get profileLabel() { return getLocale() === 'ja' ? 'プロファイル:' : 'Profile:' },
-  get storageLabel() { return getLocale() === 'ja' ? '保存先:' : 'Storage:' }
+  get storageLabel() { return getLocale() === 'ja' ? '保存先:' : 'Storage:' },
+  get storageUnknown() { return getLocale() === 'ja' ? '未確認' : 'Unknown' }
 }
 
 /**
@@ -415,12 +416,18 @@ function useMemoryState() {
     setLoading(true)
     setPluginVersion(null)
     setVersionStatus('checking')
+    setTotal(0)
+    setCategories({})
+    setDbPath('')
     const stats = await loadStats(selectedProfile, requestId)
     if (requestId !== profileLoadRef.current) return
     if (!stats) {
       setVersionStatus('unavailable')
       setItems([])
       setSelectedId(null)
+      setTotal(0)
+      setCategories({})
+      setDbPath('')
       setLoading(false)
       return
     }
@@ -471,19 +478,23 @@ function useMemoryState() {
   const handleSave = async (e) => {
     e.preventDefault()
     if (!formContent.trim()) return
+    const targetProfile = selectedProfile
+    const requestId = profileLoadRef.current
     setSaving(true)
     try {
       const method = editId ? 'PUT' : 'POST'
       const endpoint = editId ? `/memories/${editId}` : '/memories'
-      await api(`${endpoint}?profile=${encodeURIComponent(selectedProfile)}`, {
+      await api(`${endpoint}?profile=${encodeURIComponent(targetProfile)}`, {
         method,
         body: { content: formContent.trim(), category: formCategory }
       })
       setShowAddModal(false)
       setEditId(null)
       setFormContent('')
-      await loadStats(selectedProfile, profileLoadRef.current)
-      await fetchMemories(selectedProfile, query, selectedCategory, profileLoadRef.current)
+      if (requestId !== profileLoadRef.current) return
+      await loadStats(targetProfile, requestId)
+      if (requestId !== profileLoadRef.current) return
+      await fetchMemories(targetProfile, query, selectedCategory, requestId)
     } catch (err) {
       console.error('Error saving memory:', err)
       alert(t.saveError(err.message))
@@ -495,12 +506,16 @@ function useMemoryState() {
   // 削除処理
   const handleDelete = async (id) => {
     if (!confirm(t.deleteConfirm(id))) return
+    const targetProfile = selectedProfile
+    const requestId = profileLoadRef.current
     try {
-      await api(`/memories/${id}?profile=${encodeURIComponent(selectedProfile)}`, { method: 'DELETE' })
+      await api(`/memories/${id}?profile=${encodeURIComponent(targetProfile)}`, { method: 'DELETE' })
       if (selectedId === id) setSelectedId(null)
       if (isCompact) setMobileDetailOpen(false)
-      await loadStats(selectedProfile, profileLoadRef.current)
-      await fetchMemories(selectedProfile, query, selectedCategory, profileLoadRef.current)
+      if (requestId !== profileLoadRef.current) return
+      await loadStats(targetProfile, requestId)
+      if (requestId !== profileLoadRef.current) return
+      await fetchMemories(targetProfile, query, selectedCategory, requestId)
     } catch (err) {
       console.error('Error deleting memory:', err)
       alert(t.deleteError(err.message))
@@ -677,8 +692,8 @@ function MemorySubBar({
           jsx('span', { style: { color: '#6b7280' }, children: t.storageLabel }),
           jsx('span', {
             style: { fontWeight: 500, color: '#111827', ...S.ellipsis, maxWidth: '320px' },
-            title: dbPath || 'SQLite (~/.hermes/memory.db)',
-            children: dbPath ? `SQLite (${dbPath})` : 'SQLite (~/.hermes/memory.db)'
+            title: dbPath || t.storageUnknown,
+            children: dbPath ? `SQLite (${dbPath})` : t.storageUnknown
           })
         ]
       }),
