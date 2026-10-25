@@ -42,7 +42,7 @@ sqlite-memory/
 
 ### 1. Place the Plugin
 
-The memory provider is loaded from `$HERMES_HOME/plugins/sqlite-memory/`, after a bundled `plugins/memory/sqlite-memory/` if that directory exists. A bundled copy wins. `$HERMES_HOME` is `~/.hermes` for the default profile and `~/.hermes/profiles/<profile>` for a named profile.
+Hermes searches for memory providers in this order: the bundled `plugins/memory/<name>/`, the active `$HERMES_HOME/plugins/<name>/`, project-local `./.hermes/plugins/<name>/` when `HERMES_ENABLE_PROJECT_PLUGINS` is enabled, then Python entry points in `hermes_agent.memory_providers`. An earlier source wins when names collide. For this plugin, the per-profile user-install path is `$HERMES_HOME/plugins/sqlite-memory/`. `$HERMES_HOME` is `~/.hermes` for the default profile and `~/.hermes/profiles/<profile>` for a named profile.
 
 Default profile:
 
@@ -71,7 +71,7 @@ A copy under the running install's `plugins/memory/sqlite-memory/` is bundled: e
 > **Install only one Desktop copy.** Do not also copy this file under a second Desktop plugin directory (for example, `sqlite_memory`): every copy exports `id: 'sqlite-memory'`, regardless of its folder name, so Hermes rejects the later one as a duplicate. If you choose standalone installation instead, keep exactly one `sqlite-memory/plugin.js` under `~/.hermes/desktop-plugins/`. A standalone copy uses the file's `defaultEnabled: true` unless you have disabled it.
 > If a duplicate-ID toast appears, disable/remove the extra source package or standalone copy (not only a generated unified-package copy, which can be recreated), then run **⌘K → Reload desktop plugins**.
 >
-> **Multi-profile note:** Each profile loads only `$HERMES_HOME/plugins/sqlite-memory`. A named profile does not see `~/.hermes/plugins/`, and a profile copy does not override a shared directory scanned at the same time. Symlink every profile that should track this checkout, or update each copy yourself. The Desktop pane is one app-level copy. Its version check compares that copy with the selected profile backend's `plugin_version`. A stale profile plugin can fail that check even when the default-profile install is current.
+> **Multi-profile note:** For a user-installed provider, each profile scans its own `$HERMES_HOME/plugins/`; a named profile does not scan `~/.hermes/plugins/`. A bundled provider with the same ID takes precedence over the profile copy. Project-local discovery is separately opt-in as described above. Symlink every profile that should track this checkout, or update each copy yourself. The Desktop pane is one app-level copy. Its version check compares that copy with the selected profile backend's `plugin_version`. A stale profile plugin can fail that check even when the default-profile install is current.
 
 ### 2. Configure Agent (`config.yaml`)
 
@@ -97,7 +97,7 @@ memory:
 
 The provider reads these settings from `config.yaml` only. The Desktop memory-provider settings panel writes `<hermes_home>/sqlite-memory/config.json`. It may set `memory.provider` in `config.yaml`, but it does not copy `db_path`, `auto_extract`, or `max_recall` there. Those panel edits do not change agent behavior.
 
-When `db_path` is omitted, the agent stores memories in `memory.db` under the active profile's Hermes home. An explicit `db_path` overrides this location; profiles configured with the same path share one database. The dashboard API is different for a named profile: if that profile's config has no `db_path`, it uses `db_path` from the root `~/.hermes/config.yaml` before falling back to the profile `memory.db`. The agent does not do that fallback.
+When `db_path` is omitted, the agent stores memories in `memory.db` under the active profile's Hermes home. An explicit `db_path` overrides this location; profiles configured with the same path share one database. The dashboard API is different for a named profile: if that profile's config has no `db_path`, it checks the Hermes root's `config.yaml` (`~/.hermes/config.yaml` by default; when `HERMES_HOME` is set, the root is resolved from it) before falling back to the profile `memory.db`. The agent does not do that fallback.
 
 When `auto_extract` is enabled, only the first non-empty line of a user message is checked, and the entire line must match an explicit English or Japanese memory directive (for example, `Please remember that ...`). Trigger phrases in later lines or pasted examples are ignored. The captured text is stored as category `preference`. Use `sqlite_remember` for explicit, unambiguous storage.
 
@@ -131,7 +131,7 @@ Set `db_path` in that profile's `config.yaml` to use a custom location. Profiles
 
 ```bash
 # Default-profile example. For a named profile, point DB_PATH at that profile's Hermes home.
-DB_PATH="$HOME/.hermes/memory.db"
+DB_PATH="${HERMES_HOME:-$HOME/.hermes}/memory.db"
 
 # Inspect the 10 newest rows by id
 sqlite3 "$DB_PATH" "SELECT id, category, content, created_at FROM memories ORDER BY id DESC LIMIT 10;"
@@ -190,7 +190,7 @@ sqlite-memory/
 
 ### 1. プラグインの配置
 
-メモリプロバイダは `$HERMES_HOME/plugins/sqlite-memory/` から読み込まれます。同梱の `plugins/memory/sqlite-memory/` がある場合はそちらが先で、同梱コピーが優先されます。`$HERMES_HOME` は、default プロファイルでは `~/.hermes`、名前付きプロファイルでは `~/.hermes/profiles/<profile>` です。
+Hermes はメモリプロバイダを次の順に探索します。同梱 `plugins/memory/<name>/` → 現在の `$HERMES_HOME/plugins/<name>/` → `HERMES_ENABLE_PROJECT_PLUGINS` が有効な場合のプロジェクト内 `./.hermes/plugins/<name>/` → `hermes_agent.memory_providers` の Python entry point。同名なら先に見つかったものが優先されます。このプラグインをプロファイルごとにユーザー配置する場合のパスは `$HERMES_HOME/plugins/sqlite-memory/` です。`$HERMES_HOME` は、default プロファイルでは `~/.hermes`、名前付きプロファイルでは `~/.hermes/profiles/<profile>` です。
 
 default プロファイル:
 
@@ -219,7 +219,7 @@ ln -s "$(pwd)/sqlite-memory" "$HERMES_HOME/plugins/sqlite-memory"
 > **Desktop 用コピーは 1 つだけにしてください。** 同じファイルを `sqlite_memory` など別名の Desktop プラグインフォルダにも配置しないでください。フォルダ名にかかわらず各コピーの ID は `sqlite-memory` のため、重複すると後続の読み込みが拒否されます。Standalone 方式を選ぶ場合は、`~/.hermes/desktop-plugins/` 内に `sqlite-memory/plugin.js` を 1 つだけ配置してください。standalone は、無効化していなければファイル自身の `defaultEnabled: true` で読み込まれます。
 > duplicate-ID の通知が出た場合は、生成済みコピーだけでなく重複元の package または standalone コピーも無効化して 1 つにし、**⌘K → Reload desktop plugins** を実行してください。
 >
-> **マルチプロファイル利用時の注意:** 各プロファイルが読むのは `$HERMES_HOME/plugins/sqlite-memory` だけです。名前付きプロファイルは `~/.hermes/plugins/` を見ません。プロファイル側のコピーが、同時に探索される共有ディレクトリを上書きするわけでもありません。この checkout を追うプロファイルにはそれぞれシンボリックリンクを置くか、コピーを個別に更新してください。Desktop 画面はアプリ共通の 1 コピーです。バージョン確認は、そのコピーと選択中プロファイルのバックエンド `plugin_version` を比べます。default 側が新しくても、プロファイル側が古いとこの確認に失敗します。
+> **マルチプロファイル利用時の注意:** ユーザー配置プロバイダの探索先は各プロファイル自身の `$HERMES_HOME/plugins/` です。名前付きプロファイルは `~/.hermes/plugins/` を探索しません。同名の場合は共有の同梱プロバイダがプロファイル側のコピーより優先されます。プロジェクト内プロバイダの探索は上記のとおり別途 opt-in です。この checkout を追うプロファイルにはそれぞれシンボリックリンクを置くか、コピーを個別に更新してください。Desktop 画面はアプリ共通の 1 コピーです。バージョン確認は、そのコピーと選択中プロファイルのバックエンド `plugin_version` を比べます。default 側が新しくても、プロファイル側が古いとこの確認に失敗します。
 
 ### 2. 設定ファイル (`config.yaml`) の編集
 
@@ -245,7 +245,7 @@ memory:
 
 プロバイダが読むのは `config.yaml` だけです。Desktop のメモリプロバイダ設定パネルは `<hermes_home>/sqlite-memory/config.json` に書きます。`config.yaml` の `memory.provider` は更新することがありますが、`db_path`、`auto_extract`、`max_recall` はコピーしません。これらのパネル編集はエージェントの動作に反映されません。
 
-`db_path` を省略すると、エージェントは現在のプロファイルの Hermes home 直下に `memory.db` を作ります。`db_path` を明示すると保存先が上書きされ、複数プロファイルのエージェント設定が同じパスなら同じ DB を共有します。ダッシュボード API は名前付きプロファイルでは違います。そのプロファイルの config に `db_path` が無い場合、プロファイルの `memory.db` の前にルート `~/.hermes/config.yaml` の `db_path` を見ます。エージェントはこのフォールバックをしません。
+`db_path` を省略すると、エージェントは現在のプロファイルの Hermes home 直下に `memory.db` を作ります。`db_path` を明示すると保存先が上書きされ、複数プロファイルのエージェント設定が同じパスなら同じ DB を共有します。ダッシュボード API は名前付きプロファイルでは違います。そのプロファイルの config に `db_path` が無い場合、Hermes root の `config.yaml`（既定では `~/.hermes/config.yaml`。`HERMES_HOME` 設定時はそこから root が解決されます）の `db_path` を、プロファイルの `memory.db` より先に参照します。エージェントはこのフォールバックをしません。
 
 `auto_extract` を有効にしても、各ユーザー発言の先頭の空でない1行だけを検査し、その行全体が英語または日本語の明示的な記憶指示に一致した場合に限り保存します。後続行の引用や貼り付けた例に含まれる語句は抽出されません。保存されるのはキャプチャした本文で、カテゴリは `preference` です。確実に保存する場合は `sqlite_remember` を使用してください。
 
@@ -279,7 +279,7 @@ memory:
 
 ```bash
 # default プロファイルの例。名前付きプロファイルでは DB_PATH をその Hermes home に変更してください。
-DB_PATH="$HOME/.hermes/memory.db"
+DB_PATH="${HERMES_HOME:-$HOME/.hermes}/memory.db"
 
 # id が新しい 10 行を確認
 sqlite3 "$DB_PATH" "SELECT id, category, content, created_at FROM memories ORDER BY id DESC LIMIT 10;"
