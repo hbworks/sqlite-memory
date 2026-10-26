@@ -579,30 +579,58 @@ class SQLiteMemoryProvider(MemoryProvider):
         limit: int,
         category: Optional[str],
     ) -> List[sqlite3.Row]:
-        """Search Japanese substrings and prefer the longest matching fragment."""
+        """Rank by the rarest useful fragment, then fragment length and recency."""
         if not terms:
             return []
 
         values = ", ".join("(?)" for _ in terms)
         sql = f"""
-            WITH search_terms(term) AS (VALUES {values})
-            SELECT m.id, m.category, m.content, m.created_at,
-                   MAX(length(search_terms.term)) AS match_length,
-                   m.updated_at
-            FROM memories AS m
-            JOIN search_terms
-              ON m.content LIKE '%' || search_terms.term || '%'
+            WITH search_terms(term) AS (VALUES {values}),
+            matched_terms AS (
+                SELECT m.id, m.category, m.content, m.created_at, m.updated_at,
+                       search_terms.term
+                FROM memories AS m
+                JOIN search_terms
+                  ON m.content LIKE '%' || search_terms.term || '%'
         """
         params: List[Any] = list(terms)
         if category:
             sql += " WHERE m.category = ?"
             params.append(category)
-        sql += " GROUP BY m.id ORDER BY match_length DESC, m.updated_at DESC LIMIT ?"
+        # Two-character grams are a fallback when this memory has no longer match.
+        sql += """
+            ),
+            term_frequencies AS (
+                SELECT term, COUNT(*) AS document_frequency
+                FROM matched_terms
+                GROUP BY term
+            ),
+            scored_memories AS (
+                SELECT matched_terms.id, matched_terms.category,
+                       matched_terms.content, matched_terms.created_at,
+                       MAX(length(matched_terms.term)) AS match_length,
+                       COALESCE(
+                           MIN(CASE WHEN length(matched_terms.term) >= 3
+                               THEN term_frequencies.document_frequency END),
+                           MIN(term_frequencies.document_frequency)
+                       ) AS rarest_fragment_frequency,
+                       matched_terms.updated_at
+                FROM matched_terms
+                JOIN term_frequencies USING (term)
+                GROUP BY matched_terms.id
+            )
+            SELECT id, category, content, created_at, match_length,
+                   rarest_fragment_frequency, updated_at
+            FROM scored_memories
+            ORDER BY rarest_fragment_frequency ASC,
+                     match_length DESC, updated_at DESC
+            LIMIT ?
+        """
         params.append(limit)
         return conn.execute(sql, params).fetchall()
 
     def search_memories(self, query: str, limit: int = 5, category: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Search with FTS5 and rank Japanese substring matches by fragment length."""
+        """Search with FTS5 and merge ranked Japanese substring matches."""
         limit = _bounded_limit(limit, default=5)
         results: List[Dict[str, Any]] = []
         rows = []
@@ -634,10 +662,23 @@ class SQLiteMemoryProvider(MemoryProvider):
                 japanese_rows = self._search_japanese_memories(
                     conn, japanese_terms, limit, category
                 )
-                seen_ids = {row["id"] for row in japanese_rows}
-                rows = list(japanese_rows)
-                rows.extend(row for row in fts_rows if row["id"] not in seen_ids)
-                rows = rows[:limit]
+                # Interleave the independently ranked sources so a full
+                # Japanese result set cannot crowd out FTS-only (often Latin) hits.
+                seen_ids = set()
+                rows = []
+                for index in range(max(len(japanese_rows), len(fts_rows))):
+                    for source_rows in (japanese_rows, fts_rows):
+                        if index >= len(source_rows):
+                            continue
+                        row = source_rows[index]
+                        if row["id"] in seen_ids:
+                            continue
+                        seen_ids.add(row["id"])
+                        rows.append(row)
+                        if len(rows) >= limit:
+                            break
+                    if len(rows) >= limit:
+                        break
             elif not rows and query.strip():
                 keywords = [
                     keyword.strip()

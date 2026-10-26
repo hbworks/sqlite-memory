@@ -594,6 +594,56 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
 
         self.assertEqual(results[0]["id"], target_id)
 
+    def test_prefetch_keeps_rare_short_japanese_match_ahead_of_common_long_match(self):
+        fact_id = self.provider.add_memory(
+            "ユーザーはデータ主権を重視する", category="preference"
+        )
+        noise_ids = [
+            self.provider.add_memory(
+                f"この設計をレビューして保存する {index}", category="general"
+            )
+            for index in range(6)
+        ]
+        with self.provider._conn() as conn:
+            with conn:
+                for index, memory_id in enumerate(noise_ids, start=1):
+                    conn.execute(
+                        "UPDATE memories SET updated_at = ? WHERE id = ?",
+                        (f"2099-01-01 00:00:{index:02d}", memory_id),
+                    )
+
+        block = self.provider.prefetch(
+            "データ主権の観点でこの設計をレビューして"
+        )
+
+        self.assertIn(f"[ID: {fact_id}]", block)
+        self.assertEqual(block.count("\n- [ID:"), 5)
+
+    def test_prefetch_does_not_sum_overlapping_shared_ngrams_against_rare_fact(self):
+        shared_text = (
+            "設計変更後の動作確認と依存関係の整理を行い、影響するモジュールと"
+            "関連する処理を確認しながらレビュー結果を記録する"
+        )
+        fact_id = self.provider.add_memory(
+            "ユーザーはデータ主権を重視する", category="preference"
+        )
+        noise_ids = [
+            self.provider.add_memory(f"{shared_text} {index}", category="general")
+            for index in range(6)
+        ]
+        with self.provider._conn() as conn:
+            with conn:
+                for index, memory_id in enumerate(noise_ids, start=1):
+                    conn.execute(
+                        "UPDATE memories SET updated_at = ? WHERE id = ?",
+                        (f"2099-01-01 00:00:{index:02d}", memory_id),
+                    )
+
+        block = self.provider.prefetch(f"{shared_text} データ主権")
+
+        self.assertIn(f"[ID: {fact_id}]", block)
+        self.assertEqual(block.count("\n- [ID:"), 5)
+
     def test_japanese_search_merges_with_english_fts_results(self):
         english = "Hermes memory uses a local SQLite database"
         japanese = "このユーザーはデータ主権を最優先する"
@@ -607,6 +657,27 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
         contents = [row["content"] for row in results]
         self.assertIn(english, contents)
         self.assertIn(japanese, contents)
+
+    def test_prefetch_keeps_english_fts_result_when_japanese_results_fill_limit(self):
+        english_id = self.provider.add_memory(
+            "Hermes memory uses a local SQLite database", category="project"
+        )
+        japanese_ids = [
+            self.provider.add_memory(
+                f"ユーザーはデータ主権を重視する {index}", category="preference"
+            )
+            for index in range(5)
+        ]
+
+        block = self.provider.prefetch(
+            "Hermes memory の記憶がデータ主権の保存先と一致するか"
+        )
+
+        self.assertIn(f"[ID: {english_id}]", block)
+        self.assertTrue(
+            any(f"[ID: {memory_id}]" in block for memory_id in japanese_ids)
+        )
+        self.assertEqual(block.count("\n- [ID:"), 5)
 
     def test_prefetch_matches_japanese_keyword_inside_a_paragraph(self):
         content = "ユーザーはデータ主権を重視する"
