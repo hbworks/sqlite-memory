@@ -1380,6 +1380,55 @@ memory:
                 else:
                     os.environ[key] = value
 
+    def test_named_profile_uses_desktop_db_path_before_yaml(self):
+        """The dashboard API must open the same JSON-selected DB as the agent."""
+        import asyncio
+        import json
+        from dashboard.plugin_api import _get_db_path, get_stats
+
+        old_values = {
+            key: os.environ.get(key)
+            for key in ("HOME", "HERMES_HOME", "HERMES_PROFILE")
+        }
+        try:
+            home = Path(self.tmpdir) / "home"
+            root = home / ".hermes"
+            profile_dir = root / "profiles" / "assistant"
+            profile_dir.mkdir(parents=True)
+            yaml_db = profile_dir / "yaml.db"
+            desktop_db = profile_dir / "desktop.db"
+            (profile_dir / "config.yaml").write_text(
+                f"memory:\n  provider: sqlite-memory\n  sqlite-memory:\n    db_path: {yaml_db}\n",
+                encoding="utf-8",
+            )
+            desktop_config_dir = profile_dir / "sqlite-memory"
+            desktop_config_dir.mkdir()
+            desktop_config = desktop_config_dir / "config.json"
+            desktop_config.write_text(
+                json.dumps({"db_path": str(desktop_db)}), encoding="utf-8"
+            )
+            os.environ["HOME"] = str(home)
+            os.environ.pop("HERMES_HOME", None)
+            os.environ.pop("HERMES_PROFILE", None)
+
+            self.assertEqual(_get_db_path("assistant"), desktop_db)
+            stats = asyncio.run(get_stats(profile="assistant"))
+            self.assertEqual(Path(stats["db_path"]), desktop_db)
+
+            desktop_config.write_text(
+                json.dumps({"auto_extract": False}), encoding="utf-8"
+            )
+            self.assertEqual(_get_db_path("assistant"), yaml_db)
+
+            desktop_config.write_text(json.dumps({"db_path": ""}), encoding="utf-8")
+            self.assertEqual(_get_db_path("assistant"), profile_dir / "memory.db")
+        finally:
+            for key, value in old_values.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
     def test_config_db_path_prefers_hyphen_when_both_notations_are_present(self):
         """The canonical hyphenated setting must win when both keys define a path."""
         import sys

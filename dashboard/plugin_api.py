@@ -5,6 +5,7 @@ Mounted at /api/plugins/sqlite-memory/. The host does not mount /api/plugins/sql
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -192,6 +193,44 @@ def _read_config_db_path(config_file: Path) -> Optional[Path]:
     return None
 
 
+_DB_PATH_UNSET = object()
+
+
+def _read_desktop_config_db_path(hermes_home: Path):
+    """Read the Desktop flat-config value using the provider's profile-local rules."""
+    try:
+        home = hermes_home.expanduser().resolve()
+        provider_dir = home / "sqlite-memory"
+        config_path = provider_dir / "config.json"
+        if (
+            provider_dir.is_symlink()
+            or config_path.is_symlink()
+            or not config_path.resolve().is_relative_to(home)
+        ):
+            return _DB_PATH_UNSET
+        data = json.loads(config_path.read_text(encoding="utf-8-sig"))
+    except FileNotFoundError:
+        return _DB_PATH_UNSET
+    except (OSError, UnicodeError, ValueError, RuntimeError):
+        return _DB_PATH_UNSET
+
+    if not isinstance(data, dict) or "db_path" not in data or data["db_path"] is None:
+        return _DB_PATH_UNSET
+    value = data["db_path"]
+    if not value:
+        return None
+    return Path(os.path.expanduser(str(value)))
+
+
+def _resolve_db_path_for_home(hermes_home: Path) -> Path:
+    """Use Desktop JSON first, then this profile's YAML, then its default database."""
+    desktop_path = _read_desktop_config_db_path(hermes_home)
+    if desktop_path is not _DB_PATH_UNSET:
+        return desktop_path if desktop_path is not None else hermes_home / "memory.db"
+    yaml_path = _read_config_db_path(hermes_home / "config.yaml")
+    return yaml_path if yaml_path else hermes_home / "memory.db"
+
+
 def _get_available_profiles() -> List[str]:
     """List all available profiles."""
     profiles = ["default"]
@@ -209,35 +248,33 @@ def _get_db_path(profile: Optional[str] = None) -> Path:
 
     # 1. default / main / root / ~/.hermes が指定された場合
     if prof in _ROOT_PROFILE_ALIASES:
-        cfg_path = _read_config_db_path(root / "config.yaml")
-        return cfg_path if cfg_path else root / "memory.db"
+        return _resolve_db_path_for_home(root)
 
     # 2. 特定プロファイルが明示指定された場合
     if prof:
         prof_dir = _validated_profile_dir(root, prof)
-        cfg_path = _read_config_db_path(prof_dir / "config.yaml")
-        if cfg_path:
-            return cfg_path
-
-        return _validated_profile_db_path(root, prof_dir)
+        resolved = _resolve_db_path_for_home(prof_dir)
+        if resolved == prof_dir / "memory.db":
+            return _validated_profile_db_path(root, prof_dir)
+        return resolved
 
     # 3. 未指定の場合（HERMES_HOME、HERMES_PROFILE、active_profile、または root）
     if "HERMES_HOME" in os.environ and os.environ["HERMES_HOME"].strip():
         h_home = Path(os.path.expanduser(os.environ["HERMES_HOME"].strip()))
-        cfg_path = _read_config_db_path(h_home / "config.yaml")
-        return cfg_path if cfg_path else h_home / "memory.db"
+        return _resolve_db_path_for_home(h_home)
 
     # アクティブプロファイルの自動検出フォールバック（Agent本体側の動作と整合）
     prof_env = os.environ.get("HERMES_PROFILE", "").strip()
     if prof_env:
         prof_env = _validate_profile(prof_env)
         if prof_env in _ROOT_PROFILE_ALIASES:
-            cfg_path = _read_config_db_path(root / "config.yaml")
-            return cfg_path if cfg_path else root / "memory.db"
+            return _resolve_db_path_for_home(root)
         prof_dir = _validated_profile_dir(root, prof_env)
         if prof_dir.is_dir():
-            cfg_path = _read_config_db_path(prof_dir / "config.yaml")
-            return cfg_path if cfg_path else _validated_profile_db_path(root, prof_dir)
+            resolved = _resolve_db_path_for_home(prof_dir)
+            if resolved == prof_dir / "memory.db":
+                return _validated_profile_db_path(root, prof_dir)
+            return resolved
 
     active_name = ""
     try:
@@ -252,11 +289,12 @@ def _get_db_path(profile: Optional[str] = None) -> Path:
         if active_name not in _ROOT_PROFILE_ALIASES:
             prof_dir = _validated_profile_dir(root, active_name)
             if prof_dir.is_dir():
-                cfg_path = _read_config_db_path(prof_dir / "config.yaml")
-                return cfg_path if cfg_path else _validated_profile_db_path(root, prof_dir)
+                resolved = _resolve_db_path_for_home(prof_dir)
+                if resolved == prof_dir / "memory.db":
+                    return _validated_profile_db_path(root, prof_dir)
+                return resolved
 
-    cfg_path = _read_config_db_path(root / "config.yaml")
-    return cfg_path if cfg_path else root / "memory.db"
+    return _resolve_db_path_for_home(root)
 
 
 def _ensure_db_schema(conn: sqlite3.Connection, db_path: Optional[Path] = None) -> None:

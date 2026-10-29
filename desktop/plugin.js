@@ -22,6 +22,7 @@ import { jsx, jsxs } from 'react/jsx-runtime'
 let _rest = null
 // Keep this package version aligned with plugin.yaml and dashboard/manifest.json.
 const DESKTOP_PLUGIN_VERSION = '1.0.0'
+const MEMORY_PAGE_SIZE = 100
 
 const getLocale = () => {
   if (typeof document !== 'undefined') {
@@ -152,7 +153,14 @@ const t = {
   get defaultProfileLabel() { return getLocale() === 'ja' ? 'デフォルト (~/.hermes)' : 'Default (~/.hermes)' },
   get profileLabel() { return getLocale() === 'ja' ? 'プロファイル:' : 'Profile:' },
   get storageLabel() { return getLocale() === 'ja' ? '保存先:' : 'Storage:' },
-  get storageUnknown() { return getLocale() === 'ja' ? '未確認' : 'Unknown' }
+  get storageUnknown() { return getLocale() === 'ja' ? '未確認' : 'Unknown' },
+  get listLoadError() { return getLocale() === 'ja' ? '記憶一覧を読み込めませんでした' : 'Could not load memories' },
+  get retry() { return getLocale() === 'ja' ? '再試行' : 'Retry' },
+  get previousPage() { return getLocale() === 'ja' ? '前へ' : 'Previous' },
+  get nextPage() { return getLocale() === 'ja' ? '次へ' : 'Next' },
+  pageStatus: (page, pages, total) => getLocale() === 'ja'
+    ? `${page} / ${pages} ページ（${total} 件）`
+    : `Page ${page} of ${pages} (${total} items)`
 }
 
 /**
@@ -309,6 +317,9 @@ function useMemoryState() {
   })
   const [selectedId, setSelectedId] = useState(null)
   const [total, setTotal] = useState(0)
+  const [listTotal, setListTotal] = useState(0)
+  const [offset, setOffset] = useState(0)
+  const [memoryLoadError, setMemoryLoadError] = useState(false)
   const [categories, setCategories] = useState({})
   const [dbPath, setDbPath] = useState('')
   const [pluginVersion, setPluginVersion] = useState(null)
@@ -327,9 +338,31 @@ function useMemoryState() {
   const isManuallySelected = useRef(false)
   const prevHostProfileRef = useRef(hostProfileName)
 
+  const clearProfileView = () => {
+    setItems([])
+    setSelectedId(null)
+    setListTotal(0)
+    setOffset(0)
+    setMemoryLoadError(false)
+    setTotal(0)
+    setCategories({})
+    setDbPath('')
+    setPluginVersion(null)
+    setVersionStatus('checking')
+    setLoading(true)
+    setMobileDetailOpen(false)
+    setShowAddModal(false)
+    setEditId(null)
+    setFormContent('')
+  }
+
   // プロファイル変更
   const handleSelectProfile = (newProfile) => {
+    if (!newProfile || newProfile === selectedProfile) return
     isManuallySelected.current = true
+    profileLoadRef.current += 1
+    memoryLoadRef.current += 1
+    clearProfileView()
     setSelectedProfile(newProfile)
   }
 
@@ -339,8 +372,14 @@ function useMemoryState() {
       if (hostProfileName !== prevHostProfileRef.current) {
         prevHostProfileRef.current = hostProfileName
         isManuallySelected.current = false
+        profileLoadRef.current += 1
+        memoryLoadRef.current += 1
+        clearProfileView()
         setSelectedProfile(hostProfileName)
       } else if (!isManuallySelected.current && selectedProfile !== hostProfileName) {
+        profileLoadRef.current += 1
+        memoryLoadRef.current += 1
+        clearProfileView()
         setSelectedProfile(hostProfileName)
       }
     }
@@ -374,21 +413,46 @@ function useMemoryState() {
   }, [])
 
   // メモリ一覧の取得
-  const fetchMemories = useCallback(async (profile, q, cat, currentProfileId) => {
+  const fetchMemories = useCallback(async (profile, q, cat, currentProfileId, requestedOffset = 0) => {
     const reqId = ++memoryLoadRef.current
     setLoading(true)
+    setMemoryLoadError(false)
     try {
-      const params = new URLSearchParams({ profile, limit: '100', offset: '0' })
+      const params = new URLSearchParams({
+        profile,
+        limit: String(MEMORY_PAGE_SIZE),
+        offset: String(requestedOffset)
+      })
       if (q.trim()) params.append('query', q.trim())
       if (cat && cat !== 'all') params.append('category', cat)
 
       const data = await api(`/memories?${params.toString()}`)
       if (reqId !== memoryLoadRef.current || currentProfileId !== profileLoadRef.current) return
-      const loaded = data.items || []
+      const loaded = Array.isArray(data.items) ? data.items : []
+      const responseTotal = Number(data.total)
+      const totalCount = Number.isFinite(responseTotal) && responseTotal >= 0
+        ? responseTotal
+        : loaded.length
+      const lastValidOffset = Math.max(
+        0,
+        Math.floor((totalCount - 1) / MEMORY_PAGE_SIZE) * MEMORY_PAGE_SIZE
+      )
+      if (requestedOffset > lastValidOffset) {
+        return fetchMemories(profile, q, cat, currentProfileId, lastValidOffset)
+      }
       setItems(loaded)
+      setListTotal(totalCount)
+      setOffset(requestedOffset)
       setSelectedId((prev) => (prev && loaded.some((i) => i.id === prev) ? prev : (loaded[0]?.id ?? null)))
     } catch (e) {
       console.error('Error loading memories:', e)
+      if (reqId === memoryLoadRef.current && currentProfileId === profileLoadRef.current) {
+        setItems([])
+        setSelectedId(null)
+        setListTotal(0)
+        setOffset(0)
+        setMemoryLoadError(true)
+      }
     } finally {
       if (reqId === memoryLoadRef.current && currentProfileId === profileLoadRef.current) {
         setLoading(false)
@@ -399,18 +463,16 @@ function useMemoryState() {
   // プロファイルのロード & バージョン検証
   const loadCurrentProfile = useCallback(async () => {
     const requestId = ++profileLoadRef.current
-    setLoading(true)
-    setPluginVersion(null)
-    setVersionStatus('checking')
-    setTotal(0)
-    setCategories({})
-    setDbPath('')
+    memoryLoadRef.current += 1
+    clearProfileView()
     const stats = await loadStats(selectedProfile, requestId)
     if (requestId !== profileLoadRef.current) return
     if (!stats) {
       setVersionStatus('unavailable')
       setItems([])
       setSelectedId(null)
+      setListTotal(0)
+      setMemoryLoadError(false)
       setTotal(0)
       setCategories({})
       setDbPath('')
@@ -429,6 +491,8 @@ function useMemoryState() {
     setVersionStatus('mismatch')
     setItems([])
     setSelectedId(null)
+    setListTotal(0)
+    setMemoryLoadError(false)
     setLoading(false)
   }, [selectedProfile, loadStats, fetchMemories, query, selectedCategory])
 
@@ -447,11 +511,45 @@ function useMemoryState() {
     if (versionStatus !== 'compatible') return
 
     const timer = setTimeout(() => {
-      fetchMemories(selectedProfile, query, selectedCategory, profileLoadRef.current)
+      fetchMemories(selectedProfile, query, selectedCategory, profileLoadRef.current, 0)
     }, 200)
 
     return () => clearTimeout(timer)
   }, [query, selectedCategory, versionStatus, selectedProfile, fetchMemories])
+
+  const handleQueryChange = (value) => {
+    setQuery(value)
+    setOffset(0)
+  }
+
+  const handleCategoryChange = (value) => {
+    setSelectedCategory(value)
+    setOffset(0)
+  }
+
+  const loadPage = (requestedOffset) => {
+    const lastPageOffset = Math.max(0, Math.floor((listTotal - 1) / MEMORY_PAGE_SIZE) * MEMORY_PAGE_SIZE)
+    const nextOffset = Math.max(0, Math.min(requestedOffset, lastPageOffset))
+    if (nextOffset === offset) return Promise.resolve()
+    setOffset(nextOffset)
+    return fetchMemories(
+      selectedProfile,
+      query,
+      selectedCategory,
+      profileLoadRef.current,
+      nextOffset
+    )
+  }
+
+  const goToPreviousPage = () => loadPage(offset - MEMORY_PAGE_SIZE)
+  const goToNextPage = () => loadPage(offset + MEMORY_PAGE_SIZE)
+  const retryMemories = () => fetchMemories(
+    selectedProfile,
+    query,
+    selectedCategory,
+    profileLoadRef.current,
+    offset
+  )
 
   const activeMemory = useMemo(() => items.find((i) => i.id === selectedId) || null, [items, selectedId])
 
@@ -532,15 +630,22 @@ function useMemoryState() {
     items,
     loading,
     query,
-    setQuery,
+    setQuery: handleQueryChange,
     selectedCategory,
-    setSelectedCategory,
+    setSelectedCategory: handleCategoryChange,
     selectedProfile,
     handleSelectProfile,
     availableProfiles,
     selectedId,
     activeMemory,
     total,
+    listTotal,
+    offset,
+    pageSize: MEMORY_PAGE_SIZE,
+    memoryLoadError,
+    goToPreviousPage,
+    goToNextPage,
+    retryMemories,
     dbPath,
     pluginVersion,
     versionStatus,
@@ -746,13 +851,25 @@ function MemoryListItem({
  */
 function MemoryListColumn({
   loading,
+  loadError,
   items,
   query,
   selectedId,
   onSelectItem,
-  isCompact
+  isCompact,
+  offset,
+  pageSize,
+  total,
+  onRetry,
+  onPreviousPage,
+  onNextPage
 }) {
-  return jsx('div', {
+  const page = Math.floor(offset / pageSize) + 1
+  const pageCount = Math.max(1, Math.ceil(total / pageSize))
+  const previousDisabled = loading || offset <= 0
+  const nextDisabled = loading || offset + pageSize >= total
+
+  return jsxs('div', {
     style: {
       display: 'flex',
       flexDirection: 'column',
@@ -761,28 +878,61 @@ function MemoryListColumn({
       maxWidth: isCompact ? '100%' : '230px',
       borderRight: isCompact ? 'none' : '1px solid var(--ui-stroke-secondary)',
       backgroundColor: 'var(--card, var(--dt-card))',
-      overflowY: 'auto',
+      overflow: 'hidden',
       height: '100%',
       boxSizing: 'border-box'
     },
-    children: loading ? (
-      jsx('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '30px 10px', fontSize: '11px', color: 'var(--ui-text-secondary)' }, children: t.loading })
-    ) : items.length === 0 ? (
-      jsxs('div', {
-        style: { padding: '24px 14px', textAlign: 'center', fontSize: '11px', color: 'var(--ui-text-secondary)' },
+    children: [
+      jsx('div', {
+        style: { flex: 1, minHeight: 0, overflowY: 'auto' },
+        children: loading ? (
+          jsx('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '30px 10px', fontSize: '11px', color: 'var(--ui-text-secondary)' }, children: t.loading })
+        ) : loadError ? (
+          jsxs('div', {
+            style: { padding: '24px 14px', textAlign: 'center', fontSize: '11px', color: 'var(--ui-text-secondary)' },
+            children: [
+              jsx('div', { style: { fontWeight: 500, color: 'var(--foreground, var(--dt-foreground))', marginBottom: '8px' }, children: t.listLoadError }),
+              jsx('button', { type: 'button', onClick: onRetry, style: S.btnAction, children: t.retry })
+            ]
+          })
+        ) : items.length === 0 ? (
+          jsxs('div', {
+            style: { padding: '24px 14px', textAlign: 'center', fontSize: '11px', color: 'var(--ui-text-secondary)' },
+            children: [
+              jsx('div', { style: { fontWeight: 500, color: 'var(--foreground, var(--dt-foreground))', marginBottom: '4px' }, children: query ? t.noMatches : t.noMemories }),
+              jsx('p', { style: { fontSize: '10px', opacity: 0.75, margin: 0, lineHeight: 1.4 }, children: query ? t.tryOtherKeyword : t.emptyHint })
+            ]
+          })
+        ) : (
+          items.map((item) => jsx(MemoryListItem, {
+            key: item.id,
+            item,
+            isSelected: item.id === selectedId,
+            onSelect: () => onSelectItem(item.id)
+          }))
+        )
+      }),
+      !loading && !loadError && total > pageSize ? jsxs('div', {
+        style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', padding: '8px 10px', borderTop: '1px solid var(--ui-stroke-secondary)', fontSize: '10px', color: 'var(--ui-text-secondary)', flexShrink: 0 },
         children: [
-          jsx('div', { style: { fontWeight: 500, color: 'var(--foreground, var(--dt-foreground))', marginBottom: '4px' }, children: query ? t.noMatches : t.noMemories }),
-          jsx('p', { style: { fontSize: '10px', opacity: 0.75, margin: 0, lineHeight: 1.4 }, children: query ? t.tryOtherKeyword : t.emptyHint })
+          jsx('button', {
+            type: 'button',
+            disabled: previousDisabled,
+            onClick: onPreviousPage,
+            style: { ...S.btnAction, padding: '3px 7px', opacity: previousDisabled ? 0.45 : 1, cursor: previousDisabled ? 'not-allowed' : 'pointer' },
+            children: t.previousPage
+          }),
+          jsx('span', { style: { whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }, children: t.pageStatus(page, pageCount, total) }),
+          jsx('button', {
+            type: 'button',
+            disabled: nextDisabled,
+            onClick: onNextPage,
+            style: { ...S.btnAction, padding: '3px 7px', opacity: nextDisabled ? 0.45 : 1, cursor: nextDisabled ? 'not-allowed' : 'pointer' },
+            children: t.nextPage
+          })
         ]
-      })
-    ) : (
-      items.map((item) => jsx(MemoryListItem, {
-        key: item.id,
-        item,
-        isSelected: item.id === selectedId,
-        onSelect: () => onSelectItem(item.id)
-      }))
-    )
+      }) : null
+    ]
   })
 }
 
@@ -1038,11 +1188,18 @@ function MemoryManagementPage() {
           // 左カラム（リスト）
           (!state.isCompact || !state.mobileDetailOpen) && jsx(MemoryListColumn, {
             loading: state.loading,
+            loadError: state.memoryLoadError,
             items: state.items,
             query: state.query,
             selectedId: state.selectedId,
             onSelectItem: state.handleSelectItem,
-            isCompact: state.isCompact
+            isCompact: state.isCompact,
+            offset: state.offset,
+            pageSize: state.pageSize,
+            total: state.listTotal,
+            onRetry: state.retryMemories,
+            onPreviousPage: state.goToPreviousPage,
+            onNextPage: state.goToNextPage
           }),
 
           // 右カラム（詳細ビュー）

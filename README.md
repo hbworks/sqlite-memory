@@ -99,11 +99,11 @@ The provider reads settings from both `config.yaml` and `<hermes_home>/sqlite-me
 
 The interactive `hermes memory setup` wizard saves provider-specific values under `memory.sqlite-memory` in `config.yaml`. An existing Desktop JSON value for the same key remains effective until that JSON key is removed.
 
-When `db_path` is omitted, the agent stores memories in `memory.db` under the active profile's Hermes home. An explicit `db_path` overrides this location; profiles configured with the same path share one database. For a named profile, the dashboard reads only that profile's `config.yaml` and falls back to its `memory.db`; it does not inherit `db_path` from the Hermes root config. The default/root profile continues to use the root `config.yaml`.
+When `db_path` is omitted, the agent stores memories in `memory.db` under the active profile's Hermes home. An explicit `db_path` overrides this location; profiles configured with the same path share one database. The agent and Desktop memory browser now use the same profile-local precedence: Desktop JSON first, then that profile's `config.yaml`, then its `memory.db`. A named profile never inherits the root profile's path; the default/root profile uses the root config.
 
 When `auto_extract` is enabled, only the first non-empty line is checked. It must be an explicit leading remember request (for example, `Please remember that ...`, `remember: ...`, or `覚えておいて：...`) or a preference directive (for example, `今後は日本語で答えて`). Later lines and quoted or pasted examples are ignored. The captured text is stored as category `preference`; an existing normalized equivalent in that category is not inserted again. Use `sqlite_remember` for explicit, unambiguous storage.
 
-Agent `sqlite_search` (default 5) and `sqlite_list_memories` (default 10) clamp `limit` to 1–100. Prefetch uses `max_recall`, clamped to 5–100: values below 5 become 5, and values above 100 become 100. A bool or other non-numeric value falls back to 5. A numeric value is truncated with `int()` before that clamp. Dashboard `GET /memories` defaults to 50 and accepts 1–200. The Desktop page requests 100.
+Agent `sqlite_search` (default 5) and `sqlite_list_memories` (default 10) clamp `limit` to 1–100. Prefetch uses `max_recall`, clamped to 5–100: values below 5 become 5, and values above 100 become 100. A bool or other non-numeric value falls back to 5. A numeric value is truncated with `int()` before that clamp. Dashboard `GET /memories` defaults to 50 and accepts 1–200. The Desktop memory browser paginates 100 results at a time; search and category filters apply before pagination.
 
 ### 3. Restart Hermes
 
@@ -129,7 +129,7 @@ For queries without Japanese kana/kanji, `sqlite_search` drops tokens shorter th
 
 By default, the agent stores memories in `memory.db` under the active profile's Hermes home. On the standard Unix layout, the default profile uses `~/.hermes/memory.db`, while a named profile uses `~/.hermes/profiles/<profile>/memory.db`. If `HERMES_HOME` is configured, use that profile's configured home. Connections use WAL, so `<db>-wal` and `<db>-shm` may sit beside the database.
 
-Set `db_path` in that profile's `config.yaml` to use a custom location. Profiles whose agent config names the same path share one database. The dashboard follows the same profile-local rule: a named profile uses only its own `config.yaml`, then its own `memory.db` if `db_path` is absent.
+Set `db_path` in the Desktop memory settings panel or in that profile's `config.yaml` to use a custom location. If both specify it, the profile's Desktop JSON value wins. Profiles using the same path share one database. The agent and Desktop memory browser use the same profile-local fallback and never inherit a named profile's `db_path` from the Hermes root.
 
 ```bash
 # Default-profile example. For a named profile, point DB_PATH at that profile's Hermes home.
@@ -249,11 +249,11 @@ memory:
 
 対話型の `hermes memory setup` は、プロバイダ固有の値を `config.yaml` の `memory.sqlite-memory` に保存します。同じキーに Desktop JSON の値が残っている場合は JSON が優先されます。
 
-`db_path` を省略すると、エージェントは現在のプロファイルの Hermes home 直下に `memory.db` を作ります。`db_path` を明示すると保存先が上書きされ、複数プロファイルのエージェント設定が同じパスなら同じ DB を共有します。名前付きプロファイルのダッシュボード API は、そのプロファイル自身の `config.yaml` だけを読み、`db_path` が無ければそのプロファイルの `memory.db` を使います。Hermes root の `config.yaml` にある `db_path` は引き継ぎません。default/root プロファイルでは引き続き root の `config.yaml` を使います。
+`db_path` を省略すると、エージェントは現在のプロファイルの Hermes home 直下に `memory.db` を作ります。`db_path` を明示すると保存先が上書きされ、複数プロファイルの設定が同じパスなら同じ DB を共有します。エージェントと Desktop のメモリブラウザーは同じ優先順位で保存先を解決します。名前付きプロファイルでは Desktop JSON、次にそのプロファイル自身の `config.yaml`、最後にそのプロファイルの `memory.db` を使い、Hermes root の設定は引き継ぎません。default/root プロファイルでは root の設定を使います。
 
 `auto_extract` を有効にすると、各発言の先頭の空でない1行だけを検査します。`Please remember that ...`、`remember: ...`、`覚えておいて：...` のような明示的な記憶指示、または `今後は日本語で答えて` のような応答設定指示に一致した場合だけ保存します。後続行や引用・貼り付けた例は対象外です。保存先は `preference` カテゴリです。同カテゴリに正規化後の同一本文があれば、重複して追加しません。確実に保存する場合は `sqlite_remember` を使用してください。
 
-エージェントの `sqlite_search`（既定 5）と `sqlite_list_memories`（既定 10）は `limit` を 1〜100 に切り詰めます。Prefetch が使う `max_recall` は 5〜100 です。5 未満は 5、100 超は 100 になります。bool や数値でない値は 5 に戻り、数値は `int()` で切り捨ててからこの範囲に合わせます。ダッシュボードの `GET /memories` は既定 50、受け付ける範囲は 1〜200 です。Desktop 画面は 100 件を要求します。
+エージェントの `sqlite_search`（既定 5）と `sqlite_list_memories`（既定 10）は `limit` を 1〜100 に切り詰めます。Prefetch が使う `max_recall` は 5〜100 です。5 未満は 5、100 超は 100 になります。bool や数値でない値は 5 に戻り、数値は `int()` で切り捨ててからこの範囲に合わせます。ダッシュボードの `GET /memories` は既定 50、受け付ける範囲は 1〜200 です。Desktop のメモリブラウザーは100件ずつページ送りし、検索・カテゴリ絞り込み後の結果をページ分割します。
 
 ### 3. Hermes の再起動
 
@@ -279,7 +279,7 @@ memory:
 
 エージェントはデフォルトで、現在のプロファイルの Hermes home 直下にある `memory.db` に保存します。標準的な Unix 配置では、default プロファイルは `~/.hermes/memory.db`、名前付きプロファイルは `~/.hermes/profiles/<profile>/memory.db` です。`HERMES_HOME` を設定している場合は、そのプロファイルの Hermes home を使用してください。接続は WAL なので、データベースの隣に `<db>-wal` と `<db>-shm` ができることがあります。
 
-カスタムの保存先にするには、そのプロファイルの `config.yaml` に `db_path` を書きます。エージェント設定が同じパスのプロファイルは DB を共有します。ダッシュボードも同じプロファイル内の設定を使い、`db_path` が無ければそのプロファイル自身の `memory.db` にフォールバックします。
+カスタムの保存先は Desktop のメモリ設定パネル、またはそのプロファイルの `config.yaml` で指定できます。両方に値がある場合は Desktop JSON を優先します。同じパスを指定したプロファイルは DB を共有します。エージェントと Desktop のメモリブラウザーは同じプロファイル別の優先順位で保存先を解決します。
 
 ```bash
 # default プロファイルの例。名前付きプロファイルでは DB_PATH をその Hermes home に変更してください。
