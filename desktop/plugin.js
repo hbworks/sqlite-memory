@@ -106,6 +106,7 @@ const t = {
   get general() { return getLocale() === 'ja' ? '一般' : 'General' },
   get all() { return getLocale() === 'ja' ? 'すべて' : 'All' },
   get searchPlaceholder() { return getLocale() === 'ja' ? '「Rust」などを検索' : 'Search "Rust", etc...' },
+  get searchHint() { return getLocale() === 'ja' ? '半角・全角スペース区切りでAND検索' : 'Space-separated terms use AND matching' },
   get addMemory() { return getLocale() === 'ja' ? '記憶を追加' : 'Add Memory' },
   get category() { return getLocale() === 'ja' ? 'カテゴリ' : 'Category' },
   totalCount: (total) => getLocale() === 'ja' ? `合計: ${total} 件` : `Total: ${total}`,
@@ -693,18 +694,27 @@ function MemoryTopHeader({
         children: [
           // 検索バー
           jsxs('div', {
-            style: { position: 'relative', display: 'flex', alignItems: 'center', flex: 1, maxWidth: '320px' },
+            style: { display: 'flex', flexDirection: 'column', flex: 1, maxWidth: '320px', minWidth: 0 },
             children: [
-              jsx('span', {
-                style: { position: 'absolute', left: '8px', color: 'var(--ui-text-quaternary)', display: 'flex', pointerEvents: 'none' },
-                children: jsx(Codicon, { name: 'search', size: '0.9rem' })
+              jsxs('div', {
+                style: { position: 'relative', display: 'flex', alignItems: 'center' },
+                children: [
+                  jsx('span', {
+                    style: { position: 'absolute', left: '8px', color: 'var(--ui-text-quaternary)', display: 'flex', pointerEvents: 'none' },
+                    children: jsx(Codicon, { name: 'search', size: '0.9rem' })
+                  }),
+                  jsx('input', {
+                    type: 'text',
+                    placeholder: t.searchPlaceholder,
+                    value: query,
+                    onChange: (e) => setQuery(e.target.value),
+                    style: { width: '100%', border: 'none', background: 'transparent', paddingLeft: '28px', paddingRight: '8px', paddingTop: '4px', paddingBottom: '4px', fontSize: '13px', color: 'var(--foreground, var(--dt-foreground))', outline: 'none' }
+                  })
+                ]
               }),
-              jsx('input', {
-                type: 'text',
-                placeholder: t.searchPlaceholder,
-                value: query,
-                onChange: (e) => setQuery(e.target.value),
-                style: { width: '100%', border: 'none', background: 'transparent', paddingLeft: '28px', paddingRight: '8px', paddingTop: '4px', paddingBottom: '4px', fontSize: '13px', color: 'var(--foreground, var(--dt-foreground))', outline: 'none' }
+              jsx('span', {
+                style: { paddingLeft: '8px', fontSize: '10px', lineHeight: 1.25, color: 'var(--ui-text-quaternary)' },
+                children: t.searchHint
               })
             ]
           }),

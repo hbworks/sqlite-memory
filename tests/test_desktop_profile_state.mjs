@@ -355,6 +355,30 @@ function collectText(node, result = []) {
   return result.join('')
 }
 
+function renderMemoryTopHeader(props) {
+  const start = pluginSource.indexOf('function MemoryTopHeader({')
+  const end = pluginSource.indexOf('\n}\n\n/**\n * サブ情報バー', start)
+  assert.notEqual(start, -1, 'memory top header exists')
+  assert.notEqual(end, -1, 'memory top header ends before the profile bar')
+  const context = vm.createContext({
+    jsx: (type, values) => ({ type, props: values }),
+    jsxs: (type, values) => ({ type, props: values }),
+    S: { flexBetween: {}, flexCol: {}, flexRow: {}, btnPrimary: {} },
+    Codicon: 'Codicon',
+    t: {
+      searchPlaceholder: 'Search memories',
+      searchHint: 'Separate terms with spaces; all terms must match',
+      addMemory: 'Add memory',
+      category: 'Category'
+    }
+  })
+  const component = vm.runInContext(
+    `${pluginSource.slice(start, end + 2)}\nMemoryTopHeader`,
+    context
+  )
+  return component(props)
+}
+
 function renderMemoryListColumn(props) {
   const start = pluginSource.indexOf('function MemoryListColumn({')
   const end = pluginSource.indexOf('\n}\n\n/**\n * 右カラム', start)
@@ -426,6 +450,19 @@ test('memory list shows page controls and an explicit retry state', () => {
   const failed = renderMemoryListColumn({ ...baseProps, loadError: true, items: [] })
   assert.match(collectText(failed), /Could not load memoriesRetry/)
   assert.equal(collectElements(failed, 'button').length, 1)
+})
+
+test('memory search explains space-separated AND matching', () => {
+  const header = renderMemoryTopHeader({
+    query: '',
+    setQuery() {},
+    categoryPills: [],
+    selectedCategory: 'all',
+    onSelectCategory() {},
+    onOpenAddModal() {}
+  })
+
+  assert.match(collectText(header), /Separate terms with spaces; all terms must match/)
 })
 
 test('an unconfirmed storage path is not shown as the default database', () => {

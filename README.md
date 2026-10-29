@@ -103,7 +103,7 @@ When `db_path` is omitted, the agent stores memories in `memory.db` under the ac
 
 When `auto_extract` is enabled, only the first non-empty line is checked. It must be an explicit leading remember request (for example, `Please remember that ...`, `remember: ...`, or `覚えておいて：...`) or a preference directive (for example, `今後は日本語で答えて`). Later lines and quoted or pasted examples are ignored. The captured text is stored as category `preference`; an existing normalized equivalent in that category is not inserted again. Use `sqlite_remember` for explicit, unambiguous storage.
 
-Agent `sqlite_search` (default 5) and `sqlite_list_memories` (default 10) clamp `limit` to 1–100. Prefetch uses `max_recall`, clamped to 5–100: values below 5 become 5, and values above 100 become 100. A bool or other non-numeric value falls back to 5. A numeric value is truncated with `int()` before that clamp. Dashboard `GET /memories` defaults to 50 and accepts 1–200. The Desktop memory browser paginates 100 results at a time; search and category filters apply before pagination.
+Agent `sqlite_search` (default 5) and `sqlite_list_memories` (default 10) clamp `limit` to 1–100. Prefetch uses `max_recall`, clamped to 5–100: values below 5 become 5, and values above 100 become 100. A bool or other non-numeric value falls back to 5. A numeric value is truncated with `int()` before that clamp. Dashboard `GET /memories` defaults to 50 and accepts 1–200. The Desktop memory browser treats whitespace-separated terms as AND conditions (including ASCII and ideographic spaces), applies category filters before pagination, and paginates 100 results at a time.
 
 ### 3. Restart Hermes
 
@@ -253,7 +253,7 @@ memory:
 
 `auto_extract` を有効にすると、各発言の先頭の空でない1行だけを検査します。`Please remember that ...`、`remember: ...`、`覚えておいて：...` のような明示的な記憶指示、または `今後は日本語で答えて` のような応答設定指示に一致した場合だけ保存します。後続行や引用・貼り付けた例は対象外です。保存先は `preference` カテゴリです。同カテゴリに正規化後の同一本文があれば、重複して追加しません。確実に保存する場合は `sqlite_remember` を使用してください。
 
-エージェントの `sqlite_search`（既定 5）と `sqlite_list_memories`（既定 10）は `limit` を 1〜100 に切り詰めます。Prefetch が使う `max_recall` は 5〜100 です。5 未満は 5、100 超は 100 になります。bool や数値でない値は 5 に戻り、数値は `int()` で切り捨ててからこの範囲に合わせます。ダッシュボードの `GET /memories` は既定 50、受け付ける範囲は 1〜200 です。Desktop のメモリブラウザーは100件ずつページ送りし、検索・カテゴリ絞り込み後の結果をページ分割します。
+エージェントの `sqlite_search`（既定 5）と `sqlite_list_memories`（既定 10）は `limit` を 1〜100 に切り詰めます。Prefetch が使う `max_recall` は 5〜100 です。5 未満は 5、100 超は 100 になります。bool や数値でない値は 5 に戻り、数値は `int()` で切り捨ててからこの範囲に合わせます。ダッシュボードの `GET /memories` は既定 50、受け付ける範囲は 1〜200 です。Desktop のメモリブラウザーは、半角・全角スペース区切りの検索語をすべて含む AND 検索として扱い、カテゴリ絞り込み後の結果を100件ずつページ分割します。
 
 ### 3. Hermes の再起動
 

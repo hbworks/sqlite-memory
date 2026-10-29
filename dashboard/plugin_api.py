@@ -376,9 +376,11 @@ async def list_memories(
             where_clauses: List[str] = []
             params: List[Any] = []
 
-            if query and query.strip():
-                where_clauses.append("m.content LIKE ?")
-                params.append(f"%{query.strip()}%")
+            if query:
+                search_terms = query.replace("\u3000", " ").split()
+                for term in search_terms:
+                    where_clauses.append("m.content LIKE ?")
+                    params.append(f"%{term}%")
 
             if category and category != "all":
                 where_clauses.append("m.category = ?")

@@ -1429,6 +1429,59 @@ memory:
                 else:
                     os.environ[key] = value
 
+    def test_dashboard_search_ands_space_separated_terms_and_fullwidth_spaces(self):
+        import asyncio
+        from dashboard.plugin_api import _db_conn, list_memories
+
+        old_values = {
+            key: os.environ.get(key)
+            for key in ("HERMES_HOME", "HERMES_PROFILE")
+        }
+        try:
+            home = Path(self.tmpdir) / "hermes_home"
+            home.mkdir()
+            os.environ["HERMES_HOME"] = str(home)
+            os.environ.pop("HERMES_PROFILE", None)
+            matching_content = "ユーザーはデータ主権に関する方針を優先する"
+            rows = [
+                ("project", matching_content, "manual"),
+                ("project", "ユーザーはデータ主権を優先する", "manual"),
+                ("project", "組織方針を見直す", "manual"),
+            ]
+            with _db_conn() as conn:
+                with conn:
+                    conn.executemany(
+                        "INSERT INTO memories (category, content, source) VALUES (?, ?, ?)",
+                        rows,
+                    )
+
+            for query in (
+                "データ主権 方針",
+                "データ主権　方針",
+                "方針　データ主権",
+            ):
+                result = asyncio.run(
+                    list_memories(
+                        query=query,
+                        category=None,
+                        profile=None,
+                        limit=100,
+                        offset=0,
+                    )
+                )
+                self.assertEqual(result["total"], 1, query)
+                self.assertEqual(
+                    [item["content"] for item in result["items"]],
+                    [matching_content],
+                    query,
+                )
+        finally:
+            for key, value in old_values.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
     def test_config_db_path_prefers_hyphen_when_both_notations_are_present(self):
         """The canonical hyphenated setting must win when both keys define a path."""
         import sys
