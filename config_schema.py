@@ -37,9 +37,6 @@ CONFIG_SCHEMA = ProviderConfigSchema(
             kind=KIND_NUMBER,
             default="5",
             description="Maximum number of relevant memories to inject per turn (bounded to 5–100).",
-            minimum=5,
-            maximum=100,
-            step=1,
             inline=True,
         )
     ),

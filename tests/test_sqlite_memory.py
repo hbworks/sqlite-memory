@@ -306,9 +306,10 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
         self.assertEqual(fields_by_key["max_recall"]["maximum"], 100)
         self.assertEqual(fields_by_key["max_recall"]["step"], 1)
 
-    def test_declared_config_schema_leaves_database_path_blank(self):
+    def test_declared_config_schema_uses_host_provider_field_contract(self):
         import importlib.util
         import types
+        from dataclasses import dataclass, field as dataclass_field
         from unittest.mock import patch
 
         plugins_module = types.ModuleType("plugins")
@@ -319,8 +320,36 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
         schema_api.KIND_BOOL = "bool"
         schema_api.KIND_NUMBER = "number"
         schema_api.KIND_TEXT = "text"
-        schema_api.ProviderField = lambda **values: types.SimpleNamespace(**values)
-        schema_api.ProviderConfigSchema = lambda **values: types.SimpleNamespace(**values)
+
+        # Match the host dataclass fields: unsupported schema options must fail
+        # here instead of being accepted by an open-ended SimpleNamespace stub.
+        @dataclass(frozen=True)
+        class ProviderField:
+            key: str
+            label: str
+            kind: str = "text"
+            default: str = ""
+            description: str = ""
+            placeholder: str = ""
+            options: tuple = ()
+            env_key: object = None
+            aliases: tuple = ()
+            env_fallbacks: tuple = ()
+            inline: bool = False
+            group: str = ""
+            info: str = ""
+            scope: str = "host"
+
+        @dataclass(frozen=True)
+        class ProviderConfigSchema:
+            name: str
+            label: str
+            storage: str = "flat_json"
+            docs_url: str = ""
+            fields: tuple = dataclass_field(default_factory=tuple)
+
+        schema_api.ProviderField = ProviderField
+        schema_api.ProviderConfigSchema = ProviderConfigSchema
 
         spec = importlib.util.spec_from_file_location(
             "_sqlite_memory_config_schema_test", plugin_dir / "config_schema.py"
@@ -340,13 +369,13 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
 
         fields_by_key = {field.key: field for field in module.CONFIG_SCHEMA.fields}
         self.assertEqual(module.CONFIG_SCHEMA.label, "Persistent Memory (SQLite)")
+        self.assertEqual(set(fields_by_key), {"db_path", "auto_extract", "max_recall"})
+        self.assertTrue(all(field.inline for field in fields_by_key.values()))
         self.assertIn("first non-empty line", module.CONFIG_SCHEMA.fields[1].description)
         self.assertIn("preference", module.CONFIG_SCHEMA.fields[1].description)
         self.assertEqual(fields_by_key["db_path"].default, "")
         self.assertIn("leave blank", fields_by_key["db_path"].description.lower())
-        self.assertEqual(fields_by_key["max_recall"].minimum, 5)
-        self.assertEqual(fields_by_key["max_recall"].maximum, 100)
-        self.assertEqual(fields_by_key["max_recall"].step, 1)
+        self.assertEqual(fields_by_key["max_recall"].kind, "number")
         self.assertIn("5–100", fields_by_key["max_recall"].description)
 
     def test_config_schema_matches_memory_setup_contract(self):
