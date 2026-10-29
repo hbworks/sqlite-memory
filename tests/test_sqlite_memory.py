@@ -116,8 +116,74 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
         self.assertFalse(provider._auto_extract)
         self.assertEqual(provider._max_recall, 7)
 
+    def test_initialize_prefers_desktop_json_and_falls_back_to_yaml_per_key(self):
+        import json
+
+        profile_home = Path(self.tmpdir) / "profile"
+        desktop_db = Path(self.tmpdir) / "desktop.db"
+        yaml_db = Path(self.tmpdir) / "yaml.db"
+        desktop_config = profile_home / "sqlite-memory" / "config.json"
+        desktop_config.parent.mkdir(parents=True)
+        desktop_config.write_text(
+            json.dumps({"db_path": str(desktop_db), "auto_extract": False}),
+            encoding="utf-8",
+        )
+        config = {
+            "memory": {
+                "sqlite-memory": {
+                    "db_path": str(yaml_db),
+                    "auto_extract": True,
+                    "max_recall": 12,
+                }
+            }
+        }
+
+        with self._hermes_config_patch(config):
+            provider = SQLiteMemoryProvider()
+            provider.initialize(
+                session_id="desktop-config-test", hermes_home=str(profile_home)
+            )
+
+        self.assertEqual(provider._db_path, desktop_db)
+        self.assertFalse(provider._auto_extract)
+        self.assertEqual(provider._max_recall, 12)
+
+    def test_initialize_migrates_yaml_settings_once_to_profile_desktop_json(self):
+        import json
+        from unittest.mock import patch
+
+        profile_home = Path(self.tmpdir) / "runtime-profile"
+        environment_home = Path(self.tmpdir) / "environment-home"
+        profile_home.mkdir()
+        environment_home.mkdir()
+        configured_path = Path(self.tmpdir) / "legacy-custom.db"
+        yaml_values = {
+            "db_path": str(configured_path),
+            "auto_extract": False,
+            "max_recall": 17,
+        }
+        config = {"memory": {"sqlite-memory": dict(yaml_values)}}
+
+        with patch.dict(os.environ, {"HERMES_HOME": str(environment_home)}):
+            with self._hermes_config_patch(config):
+                provider = SQLiteMemoryProvider()
+                provider.initialize(
+                    session_id="migration-test", hermes_home=str(profile_home)
+                )
+
+        migrated_path = profile_home / "sqlite-memory" / "config.json"
+        self.assertEqual(
+            json.loads(migrated_path.read_text(encoding="utf-8")), yaml_values
+        )
+        self.assertEqual(config["memory"]["sqlite-memory"], yaml_values)
+        self.assertFalse((environment_home / "sqlite-memory" / "config.json").exists())
+        self.assertEqual(provider._db_path, configured_path)
+        self.assertFalse(provider._auto_extract)
+        self.assertEqual(provider._max_recall, 17)
+
     def test_save_config_round_trips_provider_settings_through_config_yaml(self):
         import copy
+        import json
         import types
         from unittest.mock import patch
 
@@ -211,7 +277,18 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
         self.assertEqual(provider._db_path, custom_path)
         self.assertEqual(provider._max_recall, 20)
         self.assertFalse(provider._auto_extract)
-        self.assertFalse((profile_home / "sqlite-memory" / "config.json").exists())
+        self.assertEqual(
+            json.loads(
+                (profile_home / "sqlite-memory" / "config.json").read_text(
+                    encoding="utf-8"
+                )
+            ),
+            {
+                "db_path": str(custom_path),
+                "auto_extract": "false",
+                "max_recall": "20",
+            },
+        )
 
     def test_initialize_invalid_max_recall_does_not_retain_previous_value(self):
         configured_path = Path(self.tmpdir) / "custom.db"

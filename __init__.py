@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import sqlite3
+import tempfile
 import threading
 import unicodedata
 from contextlib import contextmanager
@@ -173,6 +174,125 @@ def _get_memory_config_value(
         if value is not None and not (skip_empty and not value):
             return value
     return default
+
+
+_MEMORY_PROVIDER_CONFIG_KEYS = ("db_path", "auto_extract", "max_recall")
+
+
+def _is_path_within_home(path: Path, hermes_home: Path) -> bool:
+    try:
+        path.expanduser().resolve().relative_to(hermes_home.expanduser().resolve())
+        return True
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
+def _desktop_provider_config_path(hermes_home: Path, provider_name: str):
+    home = hermes_home.expanduser().resolve()
+    provider_dir = home / provider_name
+    config_path = provider_dir / "config.json"
+    if (
+        provider_dir.is_symlink()
+        or config_path.is_symlink()
+        or not _is_path_within_home(config_path, home)
+    ):
+        logger.warning(
+            "Ignoring SQLite memory Desktop settings outside the active profile: %s",
+            config_path,
+        )
+        return None
+    return home, config_path
+
+
+def _read_desktop_provider_config(path: Path):
+    if path.parent.is_symlink() or path.is_symlink():
+        return True, {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except FileNotFoundError:
+        return False, {}
+    except (OSError, UnicodeError, ValueError) as exc:
+        logger.warning("Could not read SQLite memory Desktop settings at %s: %s", path, exc)
+        return True, {}
+    if not isinstance(data, dict):
+        logger.warning("Ignoring non-object SQLite memory Desktop settings at %s", path)
+        return True, {}
+    return True, {
+        key: data[key]
+        for key in _MEMORY_PROVIDER_CONFIG_KEYS
+        if key in data and data[key] is not None
+    }
+
+
+def _migrate_yaml_provider_config(path: Path, hermes_home: Path, yaml_values: Dict[str, Any]):
+    """Seed the Desktop flat config once, without replacing a concurrent UI save."""
+    if not yaml_values:
+        return {}
+
+    temp_path = None
+    try:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if (
+            path.parent.is_symlink()
+            or path.is_symlink()
+            or not _is_path_within_home(path, hermes_home)
+        ):
+            logger.warning("Refusing to migrate SQLite memory settings outside the profile: %s", path)
+            return {}
+
+        fd, temp_name = tempfile.mkstemp(
+            prefix=".sqlite-memory-config-", dir=str(path.parent)
+        )
+        temp_path = Path(temp_name)
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(yaml_values, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+
+        try:
+            os.link(str(temp_path), str(path))
+        except FileExistsError:
+            _exists, current_values = _read_desktop_provider_config(path)
+            return current_values
+        return dict(yaml_values)
+    except (OSError, TypeError, ValueError) as exc:
+        logger.warning("Could not migrate SQLite memory settings to %s: %s", path, exc)
+        return {}
+    finally:
+        if temp_path is not None:
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
+
+
+def _load_desktop_provider_config(
+    hermes_home: Path, provider_name: str, yaml_values: Dict[str, Any]
+) -> Dict[str, Any]:
+    paths = _desktop_provider_config_path(hermes_home, provider_name)
+    if paths is None:
+        return {}
+    home, path = paths
+    exists, desktop_values = _read_desktop_provider_config(path)
+    if exists:
+        return desktop_values
+    return _migrate_yaml_provider_config(path, home, yaml_values)
+
+
+def _yaml_provider_config_values(config, cfg_get) -> Dict[str, Any]:
+    values = {}
+    for key in _MEMORY_PROVIDER_CONFIG_KEYS:
+        value = _get_memory_config_value(
+            config,
+            cfg_get,
+            key,
+            default=None,
+            skip_empty=(key == "db_path"),
+        )
+        if value is not None:
+            values[key] = value
+    return values
 
 
 def _setup_schema_fields(schema) -> List[Dict[str, Any]]:
@@ -375,20 +495,20 @@ class SQLiteMemoryProvider(MemoryProvider):
         try:
             from hermes_cli.config import load_config, cfg_get
             config = load_config()
-            custom_path = _get_memory_config_value(
-                config, cfg_get, "db_path", default="", skip_empty=True
+            yaml_values = _yaml_provider_config_values(config, cfg_get)
+            desktop_values = _load_desktop_provider_config(
+                self._hermes_home, self.name, yaml_values
             )
+            effective_values = {**yaml_values, **desktop_values}
+
+            custom_path = effective_values.get("db_path", "")
             if custom_path:
                 db_path = Path(os.path.expanduser(str(custom_path)))
 
-            auto_ext = _get_memory_config_value(
-                config, cfg_get, "auto_extract", default="true"
-            )
+            auto_ext = effective_values.get("auto_extract", "true")
             auto_extract = str(auto_ext).lower() in ("true", "1", "yes")
 
-            max_rec = _get_memory_config_value(
-                config, cfg_get, "max_recall", default=MAX_RECALL_RESULTS
-            )
+            max_rec = effective_values.get("max_recall", MAX_RECALL_RESULTS)
             try:
                 max_recall = _bounded_max_recall(max_rec, default=MAX_RECALL_RESULTS)
             except ValueError:

@@ -95,9 +95,9 @@ memory:
 
 `memory.provider: sqlite-memory` activates the agent provider. Listing `sqlite-memory` in `plugins.disabled` blocks that load. `plugins.enabled` is a separate gate: without it, a user install's dashboard and Desktop API are not mounted. The mounted path is `/api/plugins/sqlite-memory/` only. `sqlite_memory` is a config-section and toolset spelling, not an API mount.
 
-The provider reads these settings from `config.yaml` only. The Desktop memory-provider settings panel writes `<hermes_home>/sqlite-memory/config.json`. It may set `memory.provider` in `config.yaml`, but it does not copy `db_path`, `auto_extract`, or `max_recall` there. Those panel edits do not change agent behavior.
+The provider reads settings from both `config.yaml` and `<hermes_home>/sqlite-memory/config.json`. On the first provider initialization, if the JSON file is absent and `config.yaml` contains provider-specific values, those values are copied into the JSON file once; the YAML file is left unchanged. Thereafter, JSON values take precedence per key, with YAML as the fallback for keys absent from JSON. Desktop panel edits therefore affect agent behavior. Blank Desktop text/number fields remove their JSON key, so a same-key YAML value becomes effective again; remove that YAML key too to use the built-in default.
 
-The interactive `hermes memory setup` wizard saves provider-specific values under `memory.sqlite-memory` in `config.yaml`.
+The interactive `hermes memory setup` wizard saves provider-specific values under `memory.sqlite-memory` in `config.yaml`. An existing Desktop JSON value for the same key remains effective until that JSON key is removed.
 
 When `db_path` is omitted, the agent stores memories in `memory.db` under the active profile's Hermes home. An explicit `db_path` overrides this location; profiles configured with the same path share one database. For a named profile, the dashboard reads only that profile's `config.yaml` and falls back to its `memory.db`; it does not inherit `db_path` from the Hermes root config. The default/root profile continues to use the root `config.yaml`.
 
@@ -245,9 +245,9 @@ memory:
 
 `memory.provider: sqlite-memory` でエージェントのプロバイダが有効になります。`plugins.disabled` に `sqlite-memory` があると、その読み込みは止まります。`plugins.enabled` は別の条件です。入っていないと、ユーザーインストールのダッシュボード／Desktop API はマウントされません。マウントされるパスは `/api/plugins/sqlite-memory/` だけです。`sqlite_memory` は設定セクション名と toolset 名であり、API のマウント名ではありません。
 
-プロバイダが読むのは `config.yaml` だけです。Desktop のメモリプロバイダ設定パネルは `<hermes_home>/sqlite-memory/config.json` に書きます。`config.yaml` の `memory.provider` は更新することがありますが、`db_path`、`auto_extract`、`max_recall` はコピーしません。これらのパネル編集はエージェントの動作に反映されません。
+プロバイダは `config.yaml` と `<hermes_home>/sqlite-memory/config.json` の両方から設定を読みます。プロバイダの初回初期化時に JSON ファイルがなく、`config.yaml` にプロバイダ固有の値がある場合だけ、その値を JSON に一度コピーします。元の YAML は保持します。その後はキーごとに JSON を優先し、JSON にないキーは YAML から読みます。Desktop パネルで保存した値はエージェントの動作に反映されます。Desktop の text/number 欄を空にすると JSON のキーが削除され、同じキーの YAML 値が再び有効になります。既定値に戻すには YAML 側のキーも削除してください。
 
-対話型の `hermes memory setup` は、プロバイダ固有の値を `config.yaml` の `memory.sqlite-memory` に保存します。
+対話型の `hermes memory setup` は、プロバイダ固有の値を `config.yaml` の `memory.sqlite-memory` に保存します。同じキーに Desktop JSON の値が残っている場合は JSON が優先されます。
 
 `db_path` を省略すると、エージェントは現在のプロファイルの Hermes home 直下に `memory.db` を作ります。`db_path` を明示すると保存先が上書きされ、複数プロファイルのエージェント設定が同じパスなら同じ DB を共有します。名前付きプロファイルのダッシュボード API は、そのプロファイル自身の `config.yaml` だけを読み、`db_path` が無ければそのプロファイルの `memory.db` を使います。Hermes root の `config.yaml` にある `db_path` は引き継ぎません。default/root プロファイルでは引き続き root の `config.yaml` を使います。
 
