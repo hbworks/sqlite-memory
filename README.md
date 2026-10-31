@@ -4,9 +4,9 @@
 
 A zero-dependency, local persistent long-term memory plugin for Hermes Agent.  
 Utilizes standard Python `sqlite3` and FTS5 full-text search to provide cross-session long-term memory and automatic context prefetching.  
-Includes a dashboard API and a bundled Hermes Desktop GUI (Unified Package). The agent provider, the API, and the Desktop pane are enabled separately.
+Includes a dashboard backend API (no Web Dashboard page) and a bundled Hermes Desktop GUI (Unified Package). The agent provider, the API, and the Desktop pane are enabled separately.
 
-The product name is `Persistent Memory (SQLite)` in the plugin manifest, the settings schema, and the Desktop plugin export. Navigation stays short: the sidebar and dashboard tab are `Memory`. The recall indicator is `SQLite Memory`.
+The product name is `Persistent Memory (SQLite)` in the plugin manifest, the settings schema, and the Desktop plugin export. The Desktop sidebar label is `Memory`; this package does not expose a Web Dashboard tab. The recall indicator is `SQLite Memory`.
 
 ---
 
@@ -27,8 +27,10 @@ sqlite-memory/
 ├── memory_schema.py     # Shared memories/FTS schema initialization
 ├── memory_stats.py      # Shared read-only counts and file sizes
 ├── plugin.yaml          # Plugin manifest
-├── dashboard/           # Dashboard API (no built frontend in this package)
-│   ├── manifest.json    # entry/css point at dist/index.js and dist/style.css, which are not shipped
+├── dashboard/           # Dashboard API only (no Web Dashboard page)
+│   ├── manifest.json    # Hidden tab metadata; keeps the backend API discoverable
+│   ├── dist/
+│   │   └── index.js     # No-op entry required by the Dashboard loader
 │   └── plugin_api.py
 ├── desktop/             # Hermes Desktop GUI (Unified Package)
 │   └── plugin.js
@@ -154,9 +156,9 @@ python3 -c 'import sqlite3,sys; src=sqlite3.connect(sys.argv[1]); dst=sqlite3.co
 
 Hermes Agent 向けのローカル完結型・ゼロ依存の永続メモリプラグインです。  
 Python 標準の `sqlite3` と FTS5 全文検索を用いて、セッションをまたいだ長期記憶と自動想起 (Prefetch) を提供します。  
-ダッシュボード API と Hermes Desktop 用 GUI（Unified Package）を同梱しています。エージェント本体、API、Desktop 画面は別々に有効化します。
+ダッシュボード向けバックエンド API と Hermes Desktop 用 GUI（Unified Package）を同梱しています。Web Dashboard の画面は同梱せず、タブは非表示です。エージェント本体、API、Desktop 画面は別々に有効化します。
 
-製品名は `Persistent Memory (SQLite)` です。プラグインマニフェスト、設定スキーマ、Desktop プラグインの export がこの名前です。ナビは短く、サイドバーとダッシュボードタブは `Memory` です。想起インジケータは `SQLite Memory` です。
+製品名は `Persistent Memory (SQLite)` です。プラグインマニフェスト、設定スキーマ、Desktop プラグインの export がこの名前です。Desktop のサイドバーは `Memory` です（Web Dashboard タブは表示しません）。想起インジケータは `SQLite Memory` です。
 
 ---
 
@@ -177,8 +179,10 @@ sqlite-memory/
 ├── memory_schema.py     # Agent / Dashboard 共通のDB・FTSスキーマ初期化
 ├── memory_stats.py      # 件数とファイルサイズの共通読み取り
 ├── plugin.yaml          # プラグイン定義マニフェスト
-├── dashboard/           # ダッシュボード API（このパッケージにビルド済みフロントエンドはない）
-│   ├── manifest.json    # entry/css は未同梱の dist/index.js と dist/style.css を指す
+├── dashboard/           # ダッシュボード API のみ（Web Dashboard 画面なし）
+│   ├── manifest.json    # 非表示タブと API の登録
+│   ├── dist/
+│   │   └── index.js     # Dashboard loader が必要とする no-op entry
 │   └── plugin_api.py
 ├── desktop/             # Hermes Desktop 向け GUI (Unified Package)
 │   └── plugin.js
