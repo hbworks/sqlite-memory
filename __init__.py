@@ -372,6 +372,7 @@ class SQLiteMemoryProvider(MemoryProvider):
         self._auto_extract = True
         self._max_recall = MAX_RECALL_RESULTS
         self._session_id = ""
+        self._agent_context = "primary"
         self._last_recall_count = 0
         self._lock = threading.Lock()
         self._initialized = False
@@ -398,7 +399,7 @@ class SQLiteMemoryProvider(MemoryProvider):
                 },
                 {
                     "key": "auto_extract",
-                    "description": "Save an explicit leading remember request or reply preference as preference",
+                    "description": "Save explicit remember requests and reply preferences from primary agent context only",
                     "default": "true",
                     "secret": False,
                     "choices": ["true", "false"],
@@ -485,6 +486,8 @@ class SQLiteMemoryProvider(MemoryProvider):
     def initialize(self, session_id: str = "", **kwargs) -> None:
         """Called on agent startup / session initialization."""
         self._session_id = session_id
+        agent_context = kwargs.get("agent_context", "primary")
+        self._agent_context = agent_context if isinstance(agent_context, str) else ""
         self._last_recall_count = 0
         hermes_home = kwargs.get("hermes_home")
         self._hermes_home = _get_hermes_home_dir(hermes_home)
@@ -896,7 +899,8 @@ class SQLiteMemoryProvider(MemoryProvider):
             return collect_memory_stats(conn, self._db_path)
 
     def sync_turn(self, user_content: str, assistant_content: str, *, session_id: str = "") -> None:
-        if not self._auto_extract or not user_content:
+        # Conversation-derived persistence is reserved for the primary agent.
+        if self._agent_context != "primary" or not self._auto_extract or not user_content:
             return
 
         text = user_content.strip()

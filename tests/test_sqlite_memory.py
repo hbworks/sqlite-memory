@@ -829,6 +829,79 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
         all_pref = self.provider.list_memories(category="preference")
         self.assertEqual(len(all_pref), 2)
 
+    def test_auto_extract_is_primary_only_but_explicit_tool_writes_remain_available(self):
+        import json
+        from unittest.mock import patch
+
+        try:
+            from agent.memory_manager import MemoryManager
+            from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+        except ImportError:
+            self.skipTest("Hermes runtime is required for MemoryManager contract coverage")
+
+        for agent_context in ("primary", "subagent", "cron", "flush"):
+            with self.subTest(agent_context=agent_context):
+                hermes_home = Path(self.tmpdir) / f"profile-{agent_context}"
+                hermes_home.mkdir()
+                (hermes_home / "config.yaml").write_text(
+                    "memory:\n"
+                    "  provider: sqlite-memory\n"
+                    "  sqlite-memory:\n"
+                    "    auto_extract: true\n"
+                    "    max_recall: 5\n",
+                    encoding="utf-8",
+                )
+
+                with patch.dict(os.environ, {"HERMES_HOME": str(hermes_home)}):
+                    home_token = set_hermes_home_override(str(hermes_home))
+                    manager = None
+                    try:
+                        provider = SQLiteMemoryProvider()
+                        manager = MemoryManager()
+                        manager.add_provider(provider)
+                        manager.initialize_all(
+                            session_id=f"session-{agent_context}",
+                            hermes_home=str(hermes_home),
+                            platform="cli",
+                            agent_context=agent_context,
+                        )
+
+                        self.assertEqual(
+                            provider._db_path.resolve(), hermes_home.resolve() / "memory.db"
+                        )
+                        auto_content = f"automatic context sentinel {agent_context}"
+                        manager.sync_all(
+                            f"remember: {auto_content}",
+                            "Acknowledged.",
+                            session_id=f"session-{agent_context}",
+                        )
+                        self.assertTrue(manager.flush_pending(timeout=10))
+
+                        auto_memories = provider.list_memories(category="preference", limit=10)
+                        expected_auto = [auto_content] if agent_context == "primary" else []
+                        self.assertEqual(
+                            [memory["content"] for memory in auto_memories], expected_auto
+                        )
+
+                        # Explicit tool writes are separate from automatic sync_turn extraction.
+                        explicit_content = f"explicit context sentinel {agent_context}"
+                        result = json.loads(
+                            manager.handle_tool_call(
+                                "sqlite_remember",
+                                {"content": explicit_content, "category": "explicit"},
+                            )
+                        )
+                        self.assertEqual(result.get("status"), "success")
+                        explicit_memories = provider.list_memories(category="explicit", limit=10)
+                        self.assertIn(
+                            explicit_content,
+                            [memory["content"] for memory in explicit_memories],
+                        )
+                    finally:
+                        if manager is not None:
+                            manager.shutdown_all()
+                        reset_hermes_home_override(home_token)
+
     def test_auto_extract_deduplicates_normalized_content_within_category(self):
         self.provider.add_memory("私はWALを保持する", category="general")
         directives = (
