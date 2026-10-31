@@ -1782,6 +1782,7 @@ memory:
             stats = asyncio.run(plugin_api.get_stats(profile="default"))
 
         self.assertEqual(stats.get("plugin_version"), "9.8.7")
+        self.assertEqual(stats.get("desktop_api_contract_version"), 1)
 
     def test_memory_mutation_failures_do_not_expose_database_errors(self):
         import asyncio

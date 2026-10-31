@@ -22,6 +22,8 @@ import { jsx, jsxs } from 'react/jsx-runtime'
 let _rest = null
 // Keep this package version aligned with plugin.yaml and dashboard/manifest.json.
 const DESKTOP_PLUGIN_VERSION = '1.0.0'
+// Increment when the Desktop/backend API contract becomes incompatible across versions.
+const DESKTOP_API_CONTRACT_VERSION = 1
 const MEMORY_PAGE_SIZE = 100
 
 const getLocale = () => {
@@ -36,8 +38,9 @@ const getLocale = () => {
   return 'en'
 }
 
-function isPluginVersionCompatible(profileVersion) {
-  return typeof profileVersion === 'string' && profileVersion === DESKTOP_PLUGIN_VERSION
+function isDesktopApiIncompatible(profileContractVersion) {
+  return Number.isInteger(profileContractVersion) &&
+    profileContractVersion !== DESKTOP_API_CONTRACT_VERSION
 }
 
 /**
@@ -112,16 +115,16 @@ const t = {
   totalCount: (total) => getLocale() === 'ja' ? `合計: ${total} 件` : `Total: ${total}`,
   get refresh() { return getLocale() === 'ja' ? '更新' : 'Refresh' },
   get loading() { return getLocale() === 'ja' ? '読み込み中...' : 'Loading...' },
-  get versionChecking() { return getLocale() === 'ja' ? 'バージョンを確認中...' : 'Checking plugin version...' },
-  get versionUnavailable() { return getLocale() === 'ja' ? 'バージョンを確認できませんでした' : 'Could not verify plugin version' },
+  get versionChecking() { return getLocale() === 'ja' ? 'API 互換性を確認中...' : 'Checking API compatibility...' },
+  get versionUnavailable() { return getLocale() === 'ja' ? 'バックエンド API の互換性を確認できませんでした' : 'Could not verify backend API compatibility' },
   get unknownVersion() { return getLocale() === 'ja' ? '不明' : 'unknown' },
-  versionMismatch: (desktopVersion, profileVersion) => getLocale() === 'ja'
-    ? `バージョンが違います（Desktop プラグイン: ${desktopVersion}、プロファイル: ${profileVersion}）`
-    : `Plugin version mismatch (Desktop plugin: ${desktopVersion}, profile: ${profileVersion})`,
+  versionMismatch: (desktopContractVersion, profileContractVersion) => getLocale() === 'ja'
+    ? `バージョンが違います（Desktop API 契約: v${desktopContractVersion}、プロファイル API 契約: v${profileContractVersion}）`
+    : `Desktop API contract mismatch (Desktop: v${desktopContractVersion}, profile: v${profileContractVersion})`,
   get versionMismatchHint() {
     return getLocale() === 'ja'
-      ? 'プロファイル配下に古いプラグインが存在するか、バックエンドが古い可能性があります。~/.hermes/profiles/<profile>/plugins/ のコピーを確認してください。'
-      : 'The profile may have an outdated plugin copy or backend. Check ~/.hermes/profiles/<profile>/plugins/.'
+      ? 'Desktop 画面と選択中プロファイルの sqlite-memory バックエンドで API 契約が一致しません。両方のコピーを互換性のある組み合わせに更新してください。'
+      : 'The Desktop pane and selected profile use incompatible API contracts. Update both copies to a compatible combination.'
   },
   get versionUnavailableHint() {
     return getLocale() === 'ja'
@@ -323,7 +326,7 @@ function useMemoryState() {
   const [memoryLoadError, setMemoryLoadError] = useState(false)
   const [categories, setCategories] = useState({})
   const [dbPath, setDbPath] = useState('')
-  const [pluginVersion, setPluginVersion] = useState(null)
+  const [apiContractVersion, setApiContractVersion] = useState(null)
   const [versionStatus, setVersionStatus] = useState('checking')
   const [showAddModal, setShowAddModal] = useState(false)
   const [editId, setEditId] = useState(null)
@@ -348,7 +351,7 @@ function useMemoryState() {
     setTotal(0)
     setCategories({})
     setDbPath('')
-    setPluginVersion(null)
+    setApiContractVersion(null)
     setVersionStatus('checking')
     setLoading(true)
     setMobileDetailOpen(false)
@@ -461,7 +464,7 @@ function useMemoryState() {
     }
   }, [])
 
-  // プロファイルのロード & バージョン検証
+  // プロファイルのロード & Desktop API 契約の検証
   const loadCurrentProfile = useCallback(async () => {
     const requestId = ++profileLoadRef.current
     memoryLoadRef.current += 1
@@ -481,9 +484,10 @@ function useMemoryState() {
       return
     }
 
-    const profileVersion = typeof stats.plugin_version === 'string' ? stats.plugin_version : null
-    setPluginVersion(profileVersion)
-    if (isPluginVersionCompatible(profileVersion)) {
+    const profileContractVersion = stats.desktop_api_contract_version
+    setApiContractVersion(profileContractVersion ?? null)
+    // Older backends without this additive field are allowed to try the existing API.
+    if (!isDesktopApiIncompatible(profileContractVersion)) {
       setVersionStatus('compatible')
       await fetchMemories(selectedProfile, query, selectedCategory, requestId)
       return
@@ -648,7 +652,7 @@ function useMemoryState() {
     goToNextPage,
     retryMemories,
     dbPath,
-    pluginVersion,
+    apiContractVersion,
     versionStatus,
     showAddModal,
     editId,
@@ -1120,7 +1124,7 @@ function MemoryManagementPage() {
     const message = state.versionStatus === 'checking'
       ? t.versionChecking
       : state.versionStatus === 'mismatch'
-        ? t.versionMismatch(DESKTOP_PLUGIN_VERSION, state.pluginVersion || t.unknownVersion)
+        ? t.versionMismatch(DESKTOP_API_CONTRACT_VERSION, state.apiContractVersion ?? t.unknownVersion)
         : t.versionUnavailable
 
     const hint = state.versionStatus === 'mismatch'

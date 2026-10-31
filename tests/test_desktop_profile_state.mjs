@@ -40,8 +40,7 @@ function createHarness({ apiImpl, initialProfile = 'default', quietErrors = fals
     useEffect: () => {},
     api: (...args) => currentApi(...args),
     MEMORY_PAGE_SIZE: 100,
-    isPluginVersionCompatible: (v) => v === '0.1.0',
-    DESKTOP_PLUGIN_VERSION: '0.1.0',
+    isDesktopApiIncompatible: (v) => Number.isInteger(v) && v !== 1,
     t: {
       saveError: (e) => e,
       deleteConfirm: () => true,
@@ -71,6 +70,86 @@ function createHarness({ apiImpl, initialProfile = 'default', quietErrors = fals
     }
   }
 }
+
+test('package version differences do not block a matching Desktop API contract', async () => {
+  let memoryRequests = 0
+  const harness = createHarness({
+    apiImpl: async (url) => {
+      if (url.startsWith('/stats')) {
+        return {
+          total_memories: 1,
+          db_path: '/profile.db',
+          plugin_version: '9.8.7',
+          desktop_api_contract_version: 1
+        }
+      }
+      if (url.startsWith('/memories')) {
+        memoryRequests += 1
+        return { items: [{ id: 1, category: 'general', content: 'sentinel' }] }
+      }
+      return {}
+    }
+  })
+
+  let state = harness.run()
+  await state.reloadAll()
+  state = harness.run()
+
+  assert.equal(state.versionStatus, 'compatible')
+  assert.equal(memoryRequests, 1)
+  assert.equal(state.items[0].content, 'sentinel')
+})
+
+test('matching package versions do not hide an incompatible Desktop API contract', async () => {
+  let memoryRequests = 0
+  const harness = createHarness({
+    apiImpl: async (url) => {
+      if (url.startsWith('/stats')) {
+        return {
+          total_memories: 1,
+          db_path: '/profile.db',
+          plugin_version: '0.1.0',
+          desktop_api_contract_version: 2
+        }
+      }
+      if (url.startsWith('/memories')) {
+        memoryRequests += 1
+        return { items: [] }
+      }
+      return {}
+    }
+  })
+
+  let state = harness.run()
+  await state.reloadAll()
+  state = harness.run()
+
+  assert.equal(state.versionStatus, 'mismatch')
+  assert.equal(memoryRequests, 0)
+})
+
+test('legacy stats without API contract metadata are allowed to use the existing API', async () => {
+  let memoryRequests = 0
+  const harness = createHarness({
+    apiImpl: async (url) => {
+      if (url.startsWith('/stats')) {
+        return { total_memories: 1, db_path: '/profile.db', plugin_version: '9.8.7' }
+      }
+      if (url.startsWith('/memories')) {
+        memoryRequests += 1
+        return { items: [] }
+      }
+      return {}
+    }
+  })
+
+  let state = harness.run()
+  await state.reloadAll()
+  state = harness.run()
+
+  assert.equal(state.versionStatus, 'compatible')
+  assert.equal(memoryRequests, 1)
+})
 
 test('loadCurrentProfile clears total and dbPath at start and keeps them empty on version check failure', async () => {
   let statsResult = {

@@ -71,6 +71,9 @@ except ImportError:
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# Increment when the Desktop/backend API contract becomes incompatible across versions.
+DESKTOP_API_CONTRACT_VERSION = 1
+
 
 def _get_plugin_version() -> Optional[str]:
     """Read the version from the manifest beside this profile's plugin API."""
@@ -350,6 +353,7 @@ async def get_stats(profile: Optional[str] = Query(None, description="Profile na
                 "db_path": str(db_path),
                 "profile": profile or "default",
                 "available_profiles": _get_available_profiles(),
+                "desktop_api_contract_version": DESKTOP_API_CONTRACT_VERSION,
                 "plugin_version": _get_plugin_version(),
             }
     except HTTPException:

@@ -5,6 +5,7 @@ import vm from 'node:vm'
 
 const pluginSource = readFileSync(new URL('../desktop/plugin.js', import.meta.url), 'utf8')
 const pluginManifest = readFileSync(new URL('../plugin.yaml', import.meta.url), 'utf8')
+const apiSource = readFileSync(new URL('../dashboard/plugin_api.py', import.meta.url), 'utf8')
 const dashboardManifest = JSON.parse(readFileSync(new URL('../dashboard/manifest.json', import.meta.url), 'utf8'))
 const pageStart = pluginSource.indexOf('function MemoryManagementPage() {')
 const pageEnd = pluginSource.indexOf('\n}\n\nexport default', pageStart)
@@ -18,18 +19,30 @@ function getPackageVersion() {
   return match[1]
 }
 
-function loadVersionCompatibility() {
-  const start = pluginSource.indexOf('function isPluginVersionCompatible(profileVersion) {')
+function getDesktopApiContractVersion() {
+  const match = pluginSource.match(/^const DESKTOP_API_CONTRACT_VERSION = (\d+)$/m)
+  assert.ok(match, 'desktop plugin declares its API contract version')
+  return Number(match[1])
+}
+
+function getBackendApiContractVersion() {
+  const match = apiSource.match(/^DESKTOP_API_CONTRACT_VERSION = (\d+)$/m)
+  assert.ok(match, 'backend declares its Desktop API contract version')
+  return Number(match[1])
+}
+
+function loadApiCompatibility() {
+  const start = pluginSource.indexOf('function isDesktopApiIncompatible(profileContractVersion) {')
   const end = pluginSource.indexOf('\n}', start)
-  assert.notEqual(start, -1, 'plugin version compatibility check exists')
-  assert.notEqual(end, -1, 'plugin version compatibility check ends')
-  const context = vm.createContext({ DESKTOP_PLUGIN_VERSION: getPackageVersion() })
-  return vm.runInContext(`${pluginSource.slice(start, end + 2)}\nisPluginVersionCompatible`, context)
+  assert.notEqual(start, -1, 'Desktop API compatibility check exists')
+  assert.notEqual(end, -1, 'Desktop API compatibility check ends')
+  const context = vm.createContext({ DESKTOP_API_CONTRACT_VERSION: getDesktopApiContractVersion() })
+  return vm.runInContext(`${pluginSource.slice(start, end + 2)}\nisDesktopApiIncompatible`, context)
 }
 
 function loadTranslations() {
   const localeStart = pluginSource.indexOf('const getLocale = () => {')
-  const localeEnd = pluginSource.indexOf('\n}\n\nfunction isPluginVersionCompatible', localeStart)
+  const localeEnd = pluginSource.indexOf('\n}\n\nfunction isDesktopApiIncompatible', localeStart)
   const tStart = pluginSource.indexOf('\nconst t = {')
   const tEnd = pluginSource.indexOf('\n}\n\n/**\n * カテゴリ別スタイル設定', tStart)
   assert.notEqual(localeStart, -1, 'locale helper exists')
@@ -46,7 +59,7 @@ function loadTranslations() {
   )
 }
 
-function renderPage(versionStatus, pluginVersion) {
+function renderPage(versionStatus, apiContractVersion, pluginVersion) {
   const components = [
     'MemoryTopHeader',
     'MemorySubBar',
@@ -57,6 +70,7 @@ function renderPage(versionStatus, pluginVersion) {
   const state = {
     versionStatus,
     pluginVersion,
+    apiContractVersion,
     containerRef: null,
     query: '',
     setQuery() {},
@@ -90,7 +104,7 @@ function renderPage(versionStatus, pluginVersion) {
     handleCloseModal() {}
   }
   const context = vm.createContext({
-    DESKTOP_PLUGIN_VERSION: getPackageVersion(),
+    DESKTOP_API_CONTRACT_VERSION: getDesktopApiContractVersion(),
     useMemoryState: () => state,
     jsx: (type, props) => ({ type, props }),
     jsxs: (type, props) => ({ type, props }),
@@ -121,6 +135,10 @@ test('desktop UI version matches the package and dashboard manifests', () => {
   assert.equal(desktopVersion, dashboardManifest.version)
 })
 
+test('Desktop and backend API contract versions stay aligned', () => {
+  assert.equal(getDesktopApiContractVersion(), getBackendApiContractVersion())
+})
+
 test('product name is shared and navigation stays short', () => {
   const productName = pluginManifest.match(/^label:\s*(.+)$/m)?.[1]
   assert.equal(productName, 'Persistent Memory (SQLite)')
@@ -129,21 +147,24 @@ test('product name is shared and navigation stays short', () => {
   assert.equal(dashboardManifest.label, 'Memory')
 })
 
-test('only an exact profile plugin version is compatible', () => {
-  const isCompatible = loadVersionCompatibility()
+test('only an explicitly different Desktop API contract is incompatible', () => {
+  const isIncompatible = loadApiCompatibility()
+  const contractVersion = getDesktopApiContractVersion()
 
-  assert.equal(isCompatible(getPackageVersion()), true)
-  assert.equal(isCompatible('9.8.7'), false)
-  assert.equal(isCompatible(undefined), false)
+  assert.equal(isIncompatible(contractVersion), false)
+  assert.equal(isIncompatible(contractVersion + 1), true)
+  assert.equal(isIncompatible(undefined), false, 'legacy backends without a contract version are allowed to try')
+  assert.equal(isIncompatible('unknown'), false, 'malformed metadata is not reported as a known incompatibility')
 })
 
-test('shows a version warning instead of memory UI for a mismatched profile', () => {
-  const rendered = collectTree(renderPage('mismatch', '9.8.7'))
+test('shows a version warning instead of memory UI for an incompatible API contract', () => {
+  const incompatibleVersion = getDesktopApiContractVersion() + 1
+  const rendered = collectTree(renderPage('mismatch', incompatibleVersion))
   const text = rendered.text.join('')
 
   assert.ok(text.includes('バージョンが違います'))
-  assert.ok(text.includes('9.8.7'))
-  assert.ok(text.includes('プロファイル配下に古いプラグイン'), 'mismatch hint explains the stale profile copy')
+  assert.ok(text.includes(`v${incompatibleVersion}`))
+  assert.ok(text.includes('API'), 'mismatch hint explains the incompatible API contract')
   assert.ok(text.includes('再試行'), 'retry uses the real label, not the Reload fallback')
   assert.ok(!rendered.types.includes('MemoryTopHeader'))
   assert.ok(rendered.types.includes('MemorySubBar'), 'profile selector remains available during a version mismatch')
@@ -159,8 +180,8 @@ test('explains an unavailable backend without showing the memory editor', () => 
   assert.ok(rendered.types.includes('MemorySubBar'))
 })
 
-test('renders memory UI when the selected profile version matches', () => {
-  const rendered = collectTree(renderPage('compatible', getPackageVersion()))
+test('renders memory UI when the API contract is compatible despite a package version difference', () => {
+  const rendered = collectTree(renderPage('compatible', getDesktopApiContractVersion(), '9.8.7'))
 
   assert.ok(rendered.types.includes('MemoryTopHeader'))
   assert.ok(!rendered.text.join('').includes('バージョンが違います'))
