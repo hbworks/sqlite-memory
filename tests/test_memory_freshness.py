@@ -187,6 +187,45 @@ class TestFreshnessLifecycle(unittest.TestCase):
         self.assertIn("45日前", block)
         self.assertIn(sqlite_memory_module.STALE_MARKER, block)
 
+    # --- prefetch review hint ---
+
+    def test_prefetch_hint_names_the_overdue_ids_and_the_tools(self):
+        stale_id = self.provider.add_memory("Stale environment fact", category="environment")
+        self._age(stale_id, 60)
+        self.provider.add_memory("Fresh environment fact", category="environment")
+
+        block = self.provider.prefetch("environment fact")
+        self.assertIn("1 memory past their freshness window", block)
+        self.assertIn(f"ID: {stale_id}", block)
+        self.assertIn("sqlite_verify", block)
+        self.assertIn("supersedes=[id]", block)
+
+    def test_prefetch_hint_is_absent_when_nothing_is_overdue(self):
+        self.provider.add_memory("Fresh environment fact", category="environment")
+        self.assertNotIn("Review:", self.provider.prefetch("environment fact"))
+
+    def test_prefetch_hint_ignores_fresh_dated_claims(self):
+        self.provider.add_memory("2026-11-07 確認: 既定モデルは grok-4.7", category="hermes-config")
+        self.assertNotIn("Review:", self.provider.prefetch("既定モデル"))
+
+    def test_prefetch_hint_caps_the_listed_ids(self):
+        for index in range(5):
+            memory_id = self.provider.add_memory(f"Stale environment fact {index}", category="environment")
+            self._age(memory_id, 60)
+
+        hint = [line for line in self.provider.prefetch("environment fact").splitlines() if line.startswith("Review:")]
+        self.assertEqual(len(hint), 1)
+        self.assertIn("5 memories", hint[0])
+        self.assertIn("(+2 more)", hint[0])
+
+    def test_prefetch_hint_skips_superseded_rows(self):
+        old_id = self.provider.add_memory("Old environment fact", category="environment")
+        self._age(old_id, 60)
+        self.provider._write_memory("New environment fact", "environment", "tool", [old_id])
+
+        block = self.provider.prefetch("environment fact")
+        self.assertNotIn("Review:", block)
+
     # --- review / verify ---
 
     def test_review_lists_stale_and_date_pinned_entries_only(self):

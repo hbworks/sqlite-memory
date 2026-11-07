@@ -140,6 +140,7 @@ A stored fact decays: an environment, a model assignment or a project state can 
 | `superseded_by` | ID of the row that replaced this one |
 
 - **Age is always visible.** Injected context and search results carry the entry's age, and `⚠要確認` once it passes its category window. The agent is told to verify a flagged memory before relying on it.
+- **The injected block names what is overdue.** When anything is past its window, one line lists up to three IDs and the two ways out (`sqlite_verify` or `supersedes`), so maintenance does not depend on the agent remembering to browse.
 - **Category windows.** `hermes-config` and `environment` 30 days, `project` 90, most others 180, while `preference`, `user` and `user_profile` never expire. Entries that assert a dated state ("2026-11-01 時点", or a date stamped at the start) are always marked as date-pinned.
 - **Corrections replace, they do not stack.** Passing `supersedes: [id]` to `sqlite_remember` retires the old row: it disappears from search and injected context but stays in the database, so the correction is auditable. Restating the same fact from the same source refreshes `verified_at` instead of inserting a duplicate.
 - **Review loop.** `sqlite_review` lists entries past their window (with a reason per entry); confirm them with `sqlite_verify` or replace them with `supersedes`.
@@ -312,6 +313,7 @@ memory:
 | `superseded_by` | 置き換えた側の行 ID |
 
 - **経過日数が常に見える。** 注入される記憶ブロックと検索結果には経過日数が付き、カテゴリの期限を超えると `⚠要確認` になります。フラグの付いた記憶は、依拠する前に実物で確認するようエージェントに指示しています。
+- **注入ブロックが「何が期限切れか」を名指しする。** 期限を過ぎた行があれば、末尾に ID を最大3件と出口（`sqlite_verify` か `supersedes`）を1行で示します。棚卸しをエージェントの記憶力に依存させません。
 - **カテゴリ別の期限。** `hermes-config` と `environment` は30日、`project` は90日、その他は180日。`preference` / `user` / `user_profile` は失効しません。「2026-11-01 時点」のような時点付きの記述や、先頭に日付が付いた記述は常に「時点付き」として扱います。
 - **訂正は積み上げず、置き換える。** `sqlite_remember` に `supersedes: [id]` を渡すと旧行は退役し、検索と注入から消えますが DB には残るので、訂正の経緯は監査できます。同じ書き込み元から同じ事実を書き直した場合は、重複を増やさず `verified_at` だけ更新します。
 - **棚卸しのループ。** `sqlite_review` が期限切れの行を理由付きで列挙します。確認できたら `sqlite_verify`、違っていれば `supersedes` で差し替えます。

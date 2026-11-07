@@ -3,7 +3,7 @@
   "label": "Memory",
   "description": "Backend API for the Hermes Desktop SQLite persistent memory browser.",
   "icon": "Bookmark",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "tab": {
     "path": "/memory",
     "position": "after:skills",

@@ -21,7 +21,7 @@ import { jsx, jsxs } from 'react/jsx-runtime'
 
 let _rest = null
 // Keep this package version aligned with plugin.yaml and dashboard/manifest.json.
-const DESKTOP_PLUGIN_VERSION = '1.1.0'
+const DESKTOP_PLUGIN_VERSION = '1.2.0'
 // Increment when the Desktop/backend API contract becomes incompatible across versions.
 const DESKTOP_API_CONTRACT_VERSION = 1
 const MEMORY_PAGE_SIZE = 100

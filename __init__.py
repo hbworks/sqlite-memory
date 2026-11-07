@@ -1022,10 +1022,42 @@ class SQLiteMemoryProvider(MemoryProvider):
             f"- [ID: {m['id']}] ({m['category']}, {_freshness_label(m)}) {m['content']}"
             for m in memories
         ])
-        return (
+        block = (
             "## Relevant Long-Term Memories (from SQLite)\n"
             "Age is shown per entry. ⚠要確認 = past its freshness window; verify before relying on it.\n"
             f"{formatted}"
+        )
+        hint = self._prefetch_review_hint()
+        return f"{block}\n{hint}" if hint else block
+
+    def _prefetch_review_hint(self, max_ids: int = 3) -> str:
+        """A one-line reminder of which memories are overdue, so the agent need not browse for them.
+
+        Only rows older than two days are scanned: a fresher row can be neither TTL-expired
+        nor date-pinned, so the scan stays bounded and cannot flag a fresh write.
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT id, category, content, verified_at FROM memories "
+                "WHERE status = 'active' AND verified_at IS NOT NULL "
+                "AND verified_at < datetime('now', '-2 days') "
+                "ORDER BY verified_at ASC LIMIT 200"
+            ).fetchall()
+
+        overdue: List[int] = []
+        for row in rows:
+            freshness = _freshness(row["category"], row["verified_at"], row["content"])
+            if freshness["stale"] or freshness["date_pinned"]:
+                overdue.append(int(row["id"]))
+        if not overdue:
+            return ""
+
+        listed = ", ".join(str(memory_id) for memory_id in overdue[:max_ids])
+        extra = f" (+{len(overdue) - max_ids} more)" if len(overdue) > max_ids else ""
+        noun = "memory" if len(overdue) == 1 else "memories"
+        return (
+            f"Review: {len(overdue)} {noun} past their freshness window (ID: {listed}{extra}). "
+            "Confirm with sqlite_verify, or replace with sqlite_remember(supersedes=[id])."
         )
 
     def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
