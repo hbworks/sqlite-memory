@@ -492,8 +492,19 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
         ctx = CaptureContext()
         sqlite_memory_module.register(ctx)
 
-        self.assertEqual(len(ctx.tools), 5)
-        self.assertIn("sqlite_stats", {registration["name"] for registration in ctx.tools})
+        self.assertEqual(len(ctx.tools), 7)
+        self.assertEqual(
+            {registration["name"] for registration in ctx.tools},
+            {
+                "sqlite_remember",
+                "sqlite_search",
+                "sqlite_forget",
+                "sqlite_list_memories",
+                "sqlite_stats",
+                "sqlite_review",
+                "sqlite_verify",
+            },
+        )
         for registration in ctx.tools:
             schema = registration["schema"]
             self.assertEqual(schema.get("name"), registration["name"])
@@ -635,7 +646,10 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
 
         fts_results = self.provider.search_memories("deployment")
         like_results = self.provider.search_memories("deploy")
-        expected_fields = {"id", "category", "content", "created_at"}
+        expected_fields = {
+            "id", "category", "content", "created_at",
+            "verified_at", "age_days", "ttl_days", "stale", "date_pinned",
+        }
 
         self.assertEqual(len(fts_results), 1)
         self.assertEqual(len(like_results), 1)
@@ -1056,8 +1070,20 @@ class TestSQLiteMemoryProvider(unittest.TestCase):
         """A lossy fallback match must not edit multiple distinct mirrored entries."""
         first_content = "Fact:  use Python"
         second_content = "Fact: use  Python"
-        first_id = self.provider.add_memory(first_content, source="system_sync")
-        second_id = self.provider.add_memory(second_content, source="system_sync")
+        # Seed the ambiguity directly: add_memory now collapses same-source restatements,
+        # so only pre-existing (legacy) rows can reach this state.
+        with self.provider._conn() as conn:
+            with conn:
+                first_id = conn.execute(
+                    "INSERT INTO memories (category, content, source, status, verified_at) "
+                    "VALUES ('general', ?, 'system_sync', 'active', CURRENT_TIMESTAMP)",
+                    (first_content,),
+                ).lastrowid
+                second_id = conn.execute(
+                    "INSERT INTO memories (category, content, source, status, verified_at) "
+                    "VALUES ('general', ?, 'system_sync', 'active', CURRENT_TIMESTAMP)",
+                    (second_content,),
+                ).lastrowid
 
         with self.assertLogs(sqlite_memory_module.logger, level="WARNING"):
             self.provider.on_memory_write(

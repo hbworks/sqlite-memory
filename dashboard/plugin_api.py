@@ -370,12 +370,16 @@ async def get_stats(profile: Optional[str] = Query(None, description="Profile na
 async def list_memories(
     query: Optional[str] = Query(None, description="Search query"),
     category: Optional[str] = Query(None, description="Filter by category"),
+    status: Optional[str] = Query("active", description="Lifecycle filter: active, superseded, archived or all"),
     profile: Optional[str] = Query(None, description="Profile name"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> Dict[str, Any]:
     """List or search memories."""
     try:
+        # Direct (non-HTTP) callers pass the FastAPI default sentinel, not a string.
+        if not isinstance(status, str):
+            status = "active"
         with _db_conn(profile) as conn:
             where_clauses: List[str] = []
             params: List[Any] = []
@@ -390,11 +394,15 @@ async def list_memories(
                 where_clauses.append("m.category = ?")
                 params.append(category)
 
+            if status and status != "all":
+                where_clauses.append("m.status = ?")
+                params.append(status)
+
             where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 
             # Fetch items
             items_sql = f"""
-                SELECT id, category, content, source, created_at, updated_at
+                SELECT id, category, content, source, status, created_at, updated_at, verified_at
                 FROM memories m
                 {where_sql}
                 ORDER BY updated_at DESC
@@ -431,7 +439,8 @@ async def create_memory(
         with _db_conn(profile) as conn:
             with conn:
                 cursor = conn.execute(
-                    "INSERT INTO memories (category, content, source) VALUES (?, ?, 'desktop_ui')",
+                    "INSERT INTO memories (category, content, source, status, verified_at) "
+                    "VALUES (?, ?, 'desktop_ui', 'active', CURRENT_TIMESTAMP)",
                     (req.category.strip() or "general", req.content.strip()),
                 )
                 row = conn.execute("SELECT * FROM memories WHERE id = ?", (cursor.lastrowid,)).fetchone()
@@ -464,7 +473,8 @@ async def update_memory(
                 category = (req.category.strip() or existing["category"]) if req.category is not None else existing["category"]
 
                 conn.execute(
-                    "UPDATE memories SET content = ?, category = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    "UPDATE memories SET content = ?, category = ?, updated_at = CURRENT_TIMESTAMP, "
+                    "verified_at = CURRENT_TIMESTAMP WHERE id = ?",
                     (content, category, memory_id),
                 )
                 row = conn.execute("SELECT * FROM memories WHERE id = ?", (memory_id,)).fetchone()

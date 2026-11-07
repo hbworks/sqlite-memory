@@ -1,6 +1,6 @@
 name: sqlite-memory
 label: Persistent Memory (SQLite)
-version: 1.0.0
+version: 1.1.0
 description: Zero-dependency local persistent long-term memory for Hermes Agent.
 author: masato
 provides_tools:
@@ -9,6 +9,8 @@ provides_tools:
   - sqlite_forget
   - sqlite_list_memories
   - sqlite_stats
+  - sqlite_review
+  - sqlite_verify
 dashboard:
   manifest: dashboard/manifest.json
 

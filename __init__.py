@@ -6,6 +6,7 @@ Python's built-in sqlite3 and FTS5 full-text search.
 
 from __future__ import annotations
 
+import datetime
 import json
 import logging
 import os
@@ -48,6 +49,34 @@ MAX_MEMORY_RESULTS = 100
 MAX_JAPANESE_SEARCH_TERMS = 500
 INDICATOR_GLYPH = "💾"
 
+# --- Freshness policy ---
+# Days after which a memory of this category is treated as needing re-verification.
+# None = never expires (durable preferences and identity facts).
+CATEGORY_TTL_DAYS: Dict[str, Optional[int]] = {
+    "hermes-config": 30,
+    "environment": 30,
+    "project": 90,
+    "general": 180,
+    "workflow": 180,
+    "decision": 180,
+    "skill": 180,
+    "team": 180,
+    "preference": None,
+    "user": None,
+    "user_profile": None,
+}
+DEFAULT_TTL_DAYS = 180
+STALE_MARKER = "⚠要確認"
+# A sentence pinned to a moment (a date with a state word: 時点 / 確認 / 現在 / 実測) decays
+# even inside a durable category — it asserts a state, not a timeless rule. A bare
+# provenance date ("（2026-11-01 ユーザー指示）") does not.
+TIME_BOUND_PATTERN = re.compile(
+    r"(\d{4}[-/]\d{1,2}(?:[-/]\d{1,2})?[^\n]{0,16}時点"
+    r"|\d{4}[-/]\d{1,2}(?:[-/]\d{1,2})?\s*時点で|時点で|\bas of\b"
+    r"|^\s*\d{4}[-/]\d{1,2}(?:[-/]\d{1,2})?\s*(?:時点|確認|現在|実測))",
+    re.IGNORECASE,
+)
+
 # --- Tool Schemas ---
 REMEMBER_SCHEMA = {
     "type": "function",
@@ -62,6 +91,11 @@ REMEMBER_SCHEMA = {
                     "type": "string",
                     "description": "Category for organizing memories (e.g. 'preference', 'project', 'user', 'rule', 'general').",
                     "default": "general",
+                },
+                "supersedes": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "IDs of memories this fact replaces. They are marked superseded and stop appearing in search.",
                 },
             },
             "required": ["content"],
@@ -108,7 +142,51 @@ LIST_SCHEMA = {
             "properties": {
                 "category": {"type": "string", "description": "Optional category filter."},
                 "limit": {"type": "integer", "description": "Maximum number of memories (default 10, bounded to 1–100).", "default": 10},
+                "include_superseded": {
+                    "type": "boolean",
+                    "description": "Also list memories that a newer memory replaced (default false).",
+                    "default": False,
+                },
             },
+        },
+    },
+}
+
+REVIEW_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "sqlite_review",
+        "description": "List memories past their freshness window (category TTL, unknown date, or a date-pinned claim) so they can be re-verified or replaced.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "days": {
+                    "type": "integer",
+                    "description": "Also flag memories older than this many days. 0 (default) applies the per-category policy only.",
+                    "default": 0,
+                },
+                "category": {"type": "string", "description": "Optional category filter."},
+                "limit": {"type": "integer", "description": "Maximum number of entries (default 50, bounded to 1–100).", "default": 50},
+            },
+        },
+    },
+}
+
+VERIFY_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "sqlite_verify",
+        "description": "Mark memories as still true right now, resetting their freshness clock.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "memory_ids": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "IDs of the memories that were confirmed.",
+                },
+            },
+            "required": ["memory_ids"],
         },
     },
 }
@@ -343,6 +421,82 @@ def _bounded_max_recall(value: Any, default: int = MAX_RECALL_RESULTS) -> int:
     return max(MAX_RECALL_RESULTS, _bounded_limit(value, default=default))
 
 
+# --- Freshness helpers ---
+
+def _parse_timestamp(value: Any) -> Optional[datetime.datetime]:
+    """Parse the timestamp formats SQLite holds (CURRENT_TIMESTAMP, ISO, epoch)."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime.datetime):
+        moment = value
+    elif isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            moment = datetime.datetime.fromtimestamp(float(value), datetime.timezone.utc)
+        except (OSError, OverflowError, ValueError):
+            return None
+    else:
+        text = str(value).strip()
+        if not text:
+            return None
+        moment = None
+        for parse in (
+            lambda t: datetime.datetime.fromisoformat(t.replace("Z", "+00:00")),
+            lambda t: datetime.datetime.strptime(t, "%Y-%m-%d %H:%M:%S"),
+            lambda t: datetime.datetime.strptime(t, "%Y-%m-%d"),
+        ):
+            try:
+                moment = parse(text)
+                break
+            except ValueError:
+                continue
+        if moment is None:
+            return None
+    if moment.tzinfo is None:
+        # SQLite CURRENT_TIMESTAMP is UTC.
+        moment = moment.replace(tzinfo=datetime.timezone.utc)
+    return moment
+
+
+def _age_days(value: Any) -> Optional[int]:
+    moment = _parse_timestamp(value)
+    if moment is None:
+        return None
+    delta = datetime.datetime.now(datetime.timezone.utc) - moment
+    return max(0, int(delta.total_seconds() // 86400))
+
+
+def _ttl_days(category: Optional[str]) -> Optional[int]:
+    if not category:
+        return DEFAULT_TTL_DAYS
+    return CATEGORY_TTL_DAYS.get(category, DEFAULT_TTL_DAYS)
+
+
+def _freshness(category: Optional[str], verified_at: Any, content: str = "") -> Dict[str, Any]:
+    """Describe how trustworthy an entry is right now, without deciding for the reader."""
+    age = _age_days(verified_at)
+    ttl = _ttl_days(category)
+    # A dated claim written/verified moments ago is simply current; flag it once it ages,
+    # otherwise every fresh write would be reported as needing review.
+    dated = bool(TIME_BOUND_PATTERN.search(content or "")) and (age is None or age > 1)
+    return {
+        "verified_at": verified_at,
+        "age_days": age,
+        "ttl_days": ttl,
+        "stale": (ttl is not None and age is not None and age > ttl),
+        "date_pinned": dated,
+    }
+
+
+def _freshness_label(fields: Dict[str, Any]) -> str:
+    """One-line marker for the injected memory block."""
+    label = f"{fields['age_days']}日前" if fields.get("age_days") is not None else "日付不明"
+    if fields.get("stale"):
+        return f"{label}, {STALE_MARKER}"
+    if fields.get("date_pinned"):
+        return f"{label}, 時点付き"
+    return label
+
+
 def _get_hermes_backup_root(hermes_home: Path) -> Path:
     """Resolve the root covered by Hermes backup for a profile-scoped home."""
     resolved_home = hermes_home.expanduser().resolve()
@@ -542,6 +696,12 @@ class SQLiteMemoryProvider(MemoryProvider):
             "- Important facts, user preferences, and project context persist across sessions.\n"
             "- Use `sqlite_remember` to proactively save new facts/rules you learn.\n"
             "- Use `sqlite_search` to find relevant past details when needed.\n"
+            "- Injected/search results carry an age and ⚠要確認 when past their freshness window: "
+            "verify such a memory against reality before relying on it.\n"
+            "- When a new fact replaces an old memory, pass `supersedes: [id]` to `sqlite_remember`; "
+            "the old row stops appearing in search but stays auditable.\n"
+            "- Use `sqlite_review` to list memories that need re-verification, and `sqlite_verify` "
+            "once you have confirmed them.\n"
             "- Use `sqlite_forget` if a memory is outdated or contradicted."
         )
 
@@ -711,14 +871,15 @@ class SQLiteMemoryProvider(MemoryProvider):
             WITH search_terms(term) AS (VALUES {values}),
             matched_terms AS (
                 SELECT m.id, m.category, m.content, m.created_at, m.updated_at,
-                       search_terms.term
+                       m.verified_at, search_terms.term
                 FROM memories AS m
                 JOIN search_terms
                   ON m.content LIKE '%' || search_terms.term || '%'
+                WHERE m.status = 'active'
         """
         params: List[Any] = list(terms)
         if category:
-            sql += " WHERE m.category = ?"
+            sql += " AND m.category = ?"
             params.append(category)
         # Two-character grams are a fallback when this memory has no longer match.
         sql += """
@@ -737,13 +898,14 @@ class SQLiteMemoryProvider(MemoryProvider):
                                THEN term_frequencies.document_frequency END),
                            MIN(term_frequencies.document_frequency)
                        ) AS rarest_fragment_frequency,
-                       matched_terms.updated_at
+                       matched_terms.updated_at,
+                       MAX(matched_terms.verified_at) AS verified_at
                 FROM matched_terms
                 JOIN term_frequencies USING (term)
                 GROUP BY matched_terms.id
             )
             SELECT id, category, content, created_at, match_length,
-                   rarest_fragment_frequency, updated_at
+                   rarest_fragment_frequency, updated_at, verified_at
             FROM scored_memories
             ORDER BY rarest_fragment_frequency ASC,
                      match_length DESC, updated_at DESC
@@ -762,10 +924,11 @@ class SQLiteMemoryProvider(MemoryProvider):
         with self._conn() as conn:
             if fts_query:
                 sql = """
-                    SELECT m.id, m.category, m.content, m.created_at, bm25(memories_fts) as rank
+                    SELECT m.id, m.category, m.content, m.created_at, m.verified_at,
+                           bm25(memories_fts) as rank
                     FROM memories_fts f
                     JOIN memories m ON m.id = f.rowid
-                    WHERE memories_fts MATCH ?
+                    WHERE memories_fts MATCH ? AND m.status = 'active'
                 """
                 params: List[Any] = [fts_query]
                 if category:
@@ -810,7 +973,7 @@ class SQLiteMemoryProvider(MemoryProvider):
                 ][:3]
                 if keywords:
                     where = " OR ".join(["m.content LIKE ?" for _ in keywords])
-                    sql = f"SELECT id, category, content, created_at FROM memories m WHERE ({where})"
+                    sql = f"SELECT id, category, content, created_at, verified_at FROM memories m WHERE ({where}) AND m.status = 'active'"
                     params = [f"%{k}%" for k in keywords]
                     if category:
                         sql += " AND m.category = ?"
@@ -820,15 +983,23 @@ class SQLiteMemoryProvider(MemoryProvider):
 
                     rows = conn.execute(sql, params).fetchall()
 
-            results = [
-                {
-                    "id": row["id"],
-                    "category": row["category"],
-                    "content": row["content"],
-                    "created_at": row["created_at"],
-                }
-                for row in rows
-            ]
+            results = []
+            for row in rows:
+                verified_at = row["verified_at"] if "verified_at" in row.keys() else None
+                freshness = _freshness(row["category"], verified_at, row["content"])
+                results.append(
+                    {
+                        "id": row["id"],
+                        "category": row["category"],
+                        "content": row["content"],
+                        "created_at": row["created_at"],
+                        "verified_at": freshness["verified_at"],
+                        "age_days": freshness["age_days"],
+                        "ttl_days": freshness["ttl_days"],
+                        "stale": freshness["stale"],
+                        "date_pinned": freshness["date_pinned"],
+                    }
+                )
 
         return results
 
@@ -847,51 +1018,183 @@ class SQLiteMemoryProvider(MemoryProvider):
         if not memories:
             return ""
 
-        formatted = "\n".join([f"- [ID: {m['id']}] ({m['category']}) {m['content']}" for m in memories])
-        return f"## Relevant Long-Term Memories (from SQLite)\n{formatted}"
+        formatted = "\n".join([
+            f"- [ID: {m['id']}] ({m['category']}, {_freshness_label(m)}) {m['content']}"
+            for m in memories
+        ])
+        return (
+            "## Relevant Long-Term Memories (from SQLite)\n"
+            "Age is shown per entry. ⚠要確認 = past its freshness window; verify before relying on it.\n"
+            f"{formatted}"
+        )
 
     def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
         pass
 
-    def add_memory(self, content: str, category: str = "general", source: str = "manual") -> int:
+    def add_memory(self, content: str, category: str = "general", source: str = "manual",
+                   supersedes: Optional[List[int]] = None) -> int:
+        """Store a memory and return its ID (see ``_write_memory`` for the full result)."""
+        return int(self._write_memory(content, category, source, supersedes)["memory_id"])
+
+    def _write_memory(self, content: str, category: str, source: str,
+                      supersedes: Optional[List[int]] = None) -> Dict[str, Any]:
+        """Insert a fact, refresh an exact duplicate, and retire the memories it replaces."""
         cleaned_content = content.strip()
+        normalized_content = _normalize_memory_content(cleaned_content)
         with self._conn() as conn:
             with conn:
-                if source == "auto_extract":
-                    # Replayed directives should not duplicate extracted rows. Keep
-                    # this check atomic without suppressing intentional other writes.
-                    conn.execute("BEGIN IMMEDIATE")
-                    normalized_content = _normalize_memory_content(cleaned_content)
-                    if normalized_content:
-                        existing_rows = conn.execute(
-                            "SELECT id, content FROM memories WHERE category = ?",
-                            (category,),
-                        ).fetchall()
-                        for row in existing_rows:
-                            if _normalize_memory_content(row["content"]) == normalized_content:
-                                return int(row["id"])
-                cursor = conn.execute(
-                    "INSERT INTO memories (category, content, source, session_id) VALUES (?, ?, ?, ?)",
-                    (category, cleaned_content, source, self._session_id),
-                )
-                return cursor.lastrowid or 0
+                # Serialize the duplicate check and the insert so two callers cannot
+                # both "find nothing" and create the same row twice.
+                conn.execute("BEGIN IMMEDIATE")
+                memory_id = 0
+                created = True
+                if normalized_content:
+                    # Only collapse restatements from the same writer: a system-sync
+                    # mirror must stay 1:1 with the core memory it mirrors.
+                    existing_rows = conn.execute(
+                        "SELECT id, content FROM memories "
+                        "WHERE category = ? AND source = ? AND status = 'active'",
+                        (category, source),
+                    ).fetchall()
+                    for row in existing_rows:
+                        if _normalize_memory_content(row["content"]) == normalized_content:
+                            memory_id = int(row["id"])
+                            created = False
+                            break
+                if created:
+                    cursor = conn.execute(
+                        "INSERT INTO memories (category, content, source, session_id, status, verified_at) "
+                        "VALUES (?, ?, ?, ?, 'active', CURRENT_TIMESTAMP)",
+                        (category, cleaned_content, source, self._session_id),
+                    )
+                    memory_id = int(cursor.lastrowid or 0)
+                else:
+                    # Restating a known fact is evidence it is still true.
+                    conn.execute(
+                        "UPDATE memories SET verified_at = CURRENT_TIMESTAMP, "
+                        "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (memory_id,),
+                    )
+                superseded = self._mark_superseded(conn, supersedes, memory_id)
+        return {"memory_id": memory_id, "created": created, "superseded": superseded}
+
+    @staticmethod
+    def _mark_superseded(conn: sqlite3.Connection, supersedes: Optional[List[int]],
+                         new_id: int) -> List[int]:
+        """Retire replaced rows without deleting them, so the correction stays auditable."""
+        applied: List[int] = []
+        seen: Set[int] = set()
+        for raw in supersedes or []:
+            if isinstance(raw, bool):
+                continue
+            try:
+                old_id = int(raw)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if old_id <= 0 or old_id == new_id or old_id in seen:
+                continue
+            seen.add(old_id)
+            cursor = conn.execute(
+                "UPDATE memories SET status = 'superseded', superseded_by = ?, "
+                "updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'active'",
+                (new_id, old_id),
+            )
+            if cursor.rowcount:
+                applied.append(old_id)
+        return applied
 
     def delete_memory(self, memory_id: int) -> bool:
         with self._conn() as conn:
             with conn:
                 return conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,)).rowcount > 0
 
-    def list_memories(self, category: Optional[str] = None, limit: int = 10) -> List[Dict[str, Any]]:
+    def list_memories(self, category: Optional[str] = None, limit: int = 10,
+                      include_superseded: bool = False) -> List[Dict[str, Any]]:
         limit = _bounded_limit(limit, default=10)
         with self._conn() as conn:
-            sql = "SELECT id, category, content, created_at FROM memories"
+            sql = ("SELECT id, category, content, source, status, created_at, updated_at, verified_at "
+                   "FROM memories")
+            where: List[str] = []
             params: List[Any] = []
             if category:
-                sql += " WHERE category = ?"
+                where.append("category = ?")
                 params.append(category)
+            if not include_superseded:
+                where.append("status = 'active'")
+            if where:
+                sql += " WHERE " + " AND ".join(where)
             sql += " ORDER BY updated_at DESC LIMIT ?"
             params.append(limit)
             return [dict(row) for row in conn.execute(sql, params).fetchall()]
+
+    def review_memories(self, days: int = 0, category: Optional[str] = None,
+                        limit: int = 50) -> List[Dict[str, Any]]:
+        """Active memories whose freshness window has passed, oldest first."""
+        limit = _bounded_limit(limit, default=50)
+        with self._conn() as conn:
+            sql = ("SELECT id, category, content, source, status, created_at, updated_at, verified_at "
+                   "FROM memories WHERE status = 'active'")
+            params: List[Any] = []
+            if category:
+                sql += " AND category = ?"
+                params.append(category)
+            sql += " ORDER BY COALESCE(verified_at, updated_at, created_at) ASC"
+            rows = conn.execute(sql, params).fetchall()
+
+        flagged: List[Dict[str, Any]] = []
+        for row in rows:
+            content = row["content"]
+            freshness = _freshness(row["category"], row["verified_at"] or row["updated_at"], content)
+            age = freshness["age_days"]
+            reasons: List[str] = []
+            if age is None:
+                reasons.append("日付不明")
+            if freshness["stale"]:
+                reasons.append(f"TTL {freshness['ttl_days']}日超過")
+            if freshness["date_pinned"]:
+                reasons.append("時点付きの記述")
+            if days and days > 0 and age is not None and age > days:
+                reasons.append(f"{days}日超過")
+            if not reasons:
+                continue
+            flagged.append(
+                {
+                    "id": row["id"],
+                    "category": row["category"],
+                    "content": content,
+                    "age_days": age,
+                    "ttl_days": freshness["ttl_days"],
+                    "reason": ", ".join(reasons),
+                    "verified_at": freshness["verified_at"],
+                }
+            )
+            if len(flagged) >= limit:
+                break
+        return flagged
+
+    def verify_memories(self, memory_ids: List[int]) -> int:
+        """Reset the freshness clock on memories that are still true."""
+        ids: List[int] = []
+        for raw in memory_ids or []:
+            if isinstance(raw, bool):
+                continue
+            try:
+                memory_id = int(raw)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if memory_id > 0:
+                ids.append(memory_id)
+        if not ids:
+            return 0
+        placeholders = ", ".join("?" for _ in ids)
+        with self._conn() as conn:
+            with conn:
+                cursor = conn.execute(
+                    f"UPDATE memories SET verified_at = CURRENT_TIMESTAMP, "
+                    f"updated_at = CURRENT_TIMESTAMP WHERE id IN ({placeholders})",
+                    ids,
+                )
+                return int(cursor.rowcount or 0)
 
     def get_stats(self) -> Dict[str, Any]:
         """Return counts and on-disk sizes for the active provider database."""
@@ -1025,7 +1328,8 @@ class SQLiteMemoryProvider(MemoryProvider):
             return [str(self._db_path.expanduser().absolute())]
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
-        return [REMEMBER_SCHEMA, SEARCH_SCHEMA, FORGET_SCHEMA, LIST_SCHEMA, STATS_SCHEMA]
+        return [REMEMBER_SCHEMA, SEARCH_SCHEMA, FORGET_SCHEMA, LIST_SCHEMA, STATS_SCHEMA,
+                REVIEW_SCHEMA, VERIFY_SCHEMA]
 
     def handle_tool_call(self, tool_name: str, args: dict, **kwargs) -> str:
         try:
@@ -1042,8 +1346,15 @@ class SQLiteMemoryProvider(MemoryProvider):
                 category = args.get("category", "general")
                 if not isinstance(category, str):
                     return json.dumps({"error": "category must be a string"})
-                mem_id = self.add_memory(content=content, category=category, source="tool")
-                return json.dumps({"status": "success", "memory_id": mem_id, "message": "Fact stored in SQLite memory."})
+                raw_supersedes = args.get("supersedes")
+                if raw_supersedes is not None and not isinstance(raw_supersedes, list):
+                    return json.dumps({"error": "supersedes must be an array of memory ids"})
+                written = self._write_memory(content, category, "tool", raw_supersedes)
+                message = (
+                    "Fact stored in SQLite memory." if written["created"]
+                    else "Existing memory refreshed (the same fact was restated)."
+                )
+                return json.dumps({"status": "success", **written, "message": message})
 
             if tool_name == "sqlite_search":
                 query = args.get("query", "")
@@ -1078,8 +1389,38 @@ class SQLiteMemoryProvider(MemoryProvider):
                 category = args.get("category")
                 if category is not None and not isinstance(category, str):
                     return json.dumps({"error": "category must be a string"})
-                memories = self.list_memories(category=category, limit=args.get("limit", 10))
+                include_superseded = bool(args.get("include_superseded", False))
+                memories = self.list_memories(
+                    category=category,
+                    limit=args.get("limit", 10),
+                    include_superseded=include_superseded,
+                )
                 return json.dumps({"status": "success", "count": len(memories), "memories": memories})
+
+            if tool_name == "sqlite_review":
+                days = args.get("days", 0)
+                if isinstance(days, bool) or not isinstance(days, int):
+                    return json.dumps({"error": "days must be an integer"})
+                category = args.get("category")
+                if category is not None and not isinstance(category, str):
+                    return json.dumps({"error": "category must be a string"})
+                pending = self.review_memories(
+                    days=days,
+                    category=category,
+                    limit=args.get("limit", 50),
+                )
+                return json.dumps({
+                    "status": "success",
+                    "count": len(pending),
+                    "needs_review": pending,
+                })
+
+            if tool_name == "sqlite_verify":
+                raw_ids = args.get("memory_ids")
+                if not isinstance(raw_ids, list):
+                    return json.dumps({"error": "memory_ids must be an array of integers"})
+                verified = self.verify_memories(raw_ids)
+                return json.dumps({"status": "success", "verified": verified})
 
             if tool_name == "sqlite_stats":
                 return json.dumps({"status": "success", **self.get_stats()})

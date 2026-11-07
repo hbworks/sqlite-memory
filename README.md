@@ -117,13 +117,33 @@ Restart the gateway, and start a new agent session, so the provider and API relo
 
 | Tool | Description | Key Parameters |
 | :--- | :--- | :--- |
-| `sqlite_remember` | Stores a new fact, rule, or preference | `content` (required), `category` (default `general`) |
-| `sqlite_search` | Keyword search: FTS5 BM25 plus Japanese substring matches ranked by longest fragment | `query` (required), `limit` (default 5, clamped to 1–100) |
+| `sqlite_remember` | Stores a new fact, rule, or preference; restating the same fact refreshes its freshness clock instead of duplicating it | `content` (required), `category` (default `general`), `supersedes` (IDs this fact replaces) |
+| `sqlite_search` | Keyword search: FTS5 BM25 plus Japanese substring matches ranked by longest fragment; results carry age and staleness | `query` (required), `limit` (default 5, clamped to 1–100) |
 | `sqlite_forget` | Deletes a memory record by ID | `memory_id` (positive integer) |
-| `sqlite_list_memories` | Lists memories, newest `updated_at` first, with an optional category filter | `category` (optional), `limit` (default 10, clamped to 1–100) |
+| `sqlite_list_memories` | Lists memories, newest `updated_at` first, with an optional category filter | `category` (optional), `limit` (default 10, clamped to 1–100), `include_superseded` (default false) |
+| `sqlite_review` | Lists memories past their freshness window so they can be re-verified or replaced | `days` (extra window, default 0 = policy only), `category`, `limit` (default 50) |
+| `sqlite_verify` | Confirms memories are still true, resetting their freshness clock | `memory_ids` (array of IDs) |
 | `sqlite_stats` | Returns memory count, category counts, last update time, database size, and WAL size | None |
 
 For queries without Japanese kana/kanji, `sqlite_search` drops tokens shorter than 2 characters and keeps at most 10 terms before the FTS query. In queries containing Japanese kana/kanji, runs are split into overlapping 2–5-character fragments (up to 500), taken across the whole run rather than only from the start. Japanese substring matches run alongside FTS even when it finds English results, and are ranked by the longest matched fragment. For queries without Japanese, LIKE is used only when FTS returns no rows.
+
+---
+
+## 🕰️ Freshness, Superseding and Review
+
+A stored fact decays: an environment, a model assignment or a project state can be true today and wrong next month. Every row therefore carries a lifecycle:
+
+| Column | Meaning |
+| :--- | :--- |
+| `status` | `active` (default), `superseded` (replaced by a newer row), `archived` (retired without a replacement) |
+| `verified_at` | Last moment the fact was known to be true (set on write, on restating, and by `sqlite_verify`) |
+| `superseded_by` | ID of the row that replaced this one |
+
+- **Age is always visible.** Injected context and search results carry the entry's age, and `⚠要確認` once it passes its category window. The agent is told to verify a flagged memory before relying on it.
+- **Category windows.** `hermes-config` and `environment` 30 days, `project` 90, most others 180, while `preference`, `user` and `user_profile` never expire. Entries that assert a dated state ("2026-11-01 時点", or a date stamped at the start) are always marked as date-pinned.
+- **Corrections replace, they do not stack.** Passing `supersedes: [id]` to `sqlite_remember` retires the old row: it disappears from search and injected context but stays in the database, so the correction is auditable. Restating the same fact from the same source refreshes `verified_at` instead of inserting a duplicate.
+- **Review loop.** `sqlite_review` lists entries past their window (with a reason per entry); confirm them with `sqlite_verify` or replace them with `supersedes`.
+- **Migration is automatic.** Opening an older database adds the columns, marks existing rows `active`, and sets `verified_at` from `updated_at`. It is idempotent and safe to run on every start.
 
 ---
 
@@ -269,13 +289,33 @@ memory:
 
 | ツール名 | 説明 | 主要引数 |
 | :--- | :--- | :--- |
-| `sqlite_remember` | 新しい事実や設定・ルールを記憶する | `content`（必須）, `category`（既定 `general`） |
-| `sqlite_search` | キーワード検索。FTS5 に加え、日本語部分一致を最長断片で順位付け | `query`（必須）, `limit`（既定 5、1〜100） |
+| `sqlite_remember` | 新しい事実や設定・ルールを記憶する。同じ事実を書き直すと重複せず鮮度だけ更新する | `content`（必須）, `category`（既定 `general`）, `supersedes`（置き換える旧 ID） |
+| `sqlite_search` | キーワード検索。FTS5 に加え、日本語部分一致を最長断片で順位付け。結果に経過日数と鮮度警告を付ける | `query`（必須）, `limit`（既定 5、1〜100） |
 | `sqlite_forget` | 不要な記憶を ID 指定で削除する | `memory_id`（正の整数） |
-| `sqlite_list_memories` | `updated_at` の新しい順に一覧する。カテゴリ絞り込み可 | `category`（任意）, `limit`（既定 10、1〜100） |
+| `sqlite_list_memories` | `updated_at` の新しい順に一覧する。カテゴリ絞り込み可 | `category`（任意）, `limit`（既定 10、1〜100）, `include_superseded`（既定 false） |
+| `sqlite_review` | 鮮度切れの記憶を列挙する（再確認・差し替えの対象） | `days`（追加の期限。既定 0 = カテゴリ方針のみ）, `category`, `limit`（既定 50） |
+| `sqlite_verify` | 記憶が今も正しいと確認し、鮮度の起点を更新する | `memory_ids`（ID の配列） |
 | `sqlite_stats` | 記憶件数・カテゴリ別件数・最終更新日時・DB本体サイズ・WALサイズを返す | なし |
 
 仮名・漢字を含まない検索では、`sqlite_search` は 2 文字未満の語を捨て、FTS に最大 10 語を渡します。仮名・漢字を含むクエリでは、日本語の連続部分を重複する 2〜5 文字の断片（最大 500 個）に分けます。長い文でも先頭だけで切らず、文全体から取ります。日本語を含むクエリでは、FTS の結果有無にかかわらず日本語部分一致も検索し、最長一致断片で順位付けします。日本語を含まない検索だけ、FTS が 0 件の場合に LIKE へフォールバックします。
+
+---
+
+## 🕰️ 鮮度・差し替え・棚卸し
+
+記憶した事実は古くなります。環境・モデル割り当て・プロジェクトの状態は、今日正しくても翌月には嘘になります。そこで各行にライフサイクルを持たせています。
+
+| 列 | 意味 |
+| :--- | :--- |
+| `status` | `active`（既定）、`superseded`（新しい行に置き換えられた）、`archived`（代替なしで退役） |
+| `verified_at` | その事実が正しいと確認できていた最後の時刻（書き込み・再記述・`sqlite_verify` で更新） |
+| `superseded_by` | 置き換えた側の行 ID |
+
+- **経過日数が常に見える。** 注入される記憶ブロックと検索結果には経過日数が付き、カテゴリの期限を超えると `⚠要確認` になります。フラグの付いた記憶は、依拠する前に実物で確認するようエージェントに指示しています。
+- **カテゴリ別の期限。** `hermes-config` と `environment` は30日、`project` は90日、その他は180日。`preference` / `user` / `user_profile` は失効しません。「2026-11-01 時点」のような時点付きの記述や、先頭に日付が付いた記述は常に「時点付き」として扱います。
+- **訂正は積み上げず、置き換える。** `sqlite_remember` に `supersedes: [id]` を渡すと旧行は退役し、検索と注入から消えますが DB には残るので、訂正の経緯は監査できます。同じ書き込み元から同じ事実を書き直した場合は、重複を増やさず `verified_at` だけ更新します。
+- **棚卸しのループ。** `sqlite_review` が期限切れの行を理由付きで列挙します。確認できたら `sqlite_verify`、違っていれば `supersedes` で差し替えます。
+- **移行は自動。** 古い DB を開くと列を追加し、既存行を `active` に、`verified_at` を `updated_at` から埋めます。冪等なので毎回の起動で実行しても安全です。
 
 ---
 

@@ -7,6 +7,47 @@ import sqlite3
 
 logger = logging.getLogger(__name__)
 
+# Lifecycle columns keep staleness explicit: a memory stays 'active' until a newer one
+# supersedes it, and ``verified_at`` is the last moment it was known to be true.
+LIFECYCLE_COLUMNS = (
+    ("status", "TEXT DEFAULT 'active'"),
+    ("verified_at", "TIMESTAMP"),
+    ("superseded_by", "INTEGER"),
+)
+
+
+def _table_columns(conn: sqlite3.Connection) -> set:
+    return {row[1] for row in conn.execute("PRAGMA table_info(memories)")}
+
+
+def _add_lifecycle_columns(conn: sqlite3.Connection) -> list:
+    """Add lifecycle columns to a pre-existing database (idempotent)."""
+    existing = _table_columns(conn)
+    added = []
+    for name, declaration in LIFECYCLE_COLUMNS:
+        if name in existing:
+            continue
+        conn.execute(f"ALTER TABLE memories ADD COLUMN {name} {declaration}")
+        added.append(name)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_status ON memories(status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_verified_at ON memories(verified_at)")
+    if added:
+        logger.info("Added SQLite memory lifecycle columns: %s", ", ".join(added))
+    return added
+
+
+def _backfill_lifecycle(conn: sqlite3.Connection) -> None:
+    """Normalize legacy rows once the FTS index is known to be in sync.
+
+    An entry's last known-good moment is the last write recorded for it; nothing older
+    is a better estimate of when it was still true.
+    """
+    conn.execute("UPDATE memories SET status = 'active' WHERE status IS NULL OR status = ''")
+    conn.execute(
+        "UPDATE memories SET verified_at = COALESCE(verified_at, updated_at, created_at, CURRENT_TIMESTAMP) "
+        "WHERE verified_at IS NULL"
+    )
+
 
 def ensure_memory_schema(conn: sqlite3.Connection) -> bool:
     """Create memory tables and FTS synchronization triggers; rebuild FTS if needed.
@@ -53,6 +94,8 @@ def ensure_memory_schema(conn: sqlite3.Connection) -> bool:
             END;
         """)
 
+        _add_lifecycle_columns(conn)
+
         try:
             mem_row = conn.execute("SELECT COUNT(*) FROM memories").fetchone()
             mem_count = mem_row[0] if mem_row else 0
@@ -63,5 +106,9 @@ def ensure_memory_schema(conn: sqlite3.Connection) -> bool:
             fts_check_completed = True
         except Exception as exc:
             logger.debug("Notice during FTS integrity check: %s", exc)
+
+        # Backfill last: these UPDATEs fire the sync trigger, which must not run
+        # against a stale index.
+        _backfill_lifecycle(conn)
 
     return fts_check_completed
