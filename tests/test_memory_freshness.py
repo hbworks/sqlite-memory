@@ -1,6 +1,7 @@
 """Freshness lifecycle tests: migration, supersede, review and verification."""
 
 import datetime
+import json
 import os
 import shutil
 import sqlite3
@@ -290,6 +291,102 @@ class TestFreshnessLifecycle(unittest.TestCase):
                 self.provider.handle_tool_call("sqlite_remember", {"content": "x", "supersedes": "1"})
             ),
         )
+
+    # --- shared resolution / consistency ---
+
+    def test_null_verified_at_falls_back_to_the_last_write_everywhere(self):
+        memory_id = self.provider.add_memory("Legacy environment fact", category="environment")
+        with self.provider._conn() as conn:
+            with conn:
+                conn.execute(
+                    "UPDATE memories SET verified_at = NULL, updated_at = ?, created_at = ? WHERE id = ?",
+                    (_days_ago(60), _days_ago(60), memory_id),
+                )
+
+        entry = self.provider.search_memories("legacy environment")[0]
+        self.assertEqual(entry["age_days"], 60)
+        self.assertTrue(entry["stale"])
+        self.assertEqual([row["id"] for row in self.provider.review_memories()], [memory_id])
+
+        hint_line = [line for line in self.provider.prefetch("legacy environment").splitlines()
+                     if line.startswith("Review:")]
+        self.assertEqual(len(hint_line), 1)
+        self.assertIn(f"ID: {memory_id}", hint_line[0])
+
+    def test_hint_and_review_agree_on_the_same_rows(self):
+        dated_id = self.provider.add_memory("2026-10-01 時点の port は 8080", category="preference")
+        self._age(dated_id, 5)
+        fresh_id = self.provider.add_memory("Fresh preference note", category="preference")
+
+        review_ids = {row["id"] for row in self.provider.review_memories()}
+        hint_line = [line for line in self.provider.prefetch("preference note port").splitlines()
+                     if line.startswith("Review:")]
+        self.assertEqual(review_ids, {dated_id})
+        self.assertNotIn(fresh_id, review_ids)
+        self.assertEqual(len(hint_line), 1)
+        self.assertIn(f"ID: {dated_id}", hint_line[0])
+
+    # --- supersede reporting ---
+
+    def test_supersedes_reports_ids_that_were_not_retired(self):
+        live_id = self.provider.add_memory("Live general fact", category="general")
+        retired_id = self.provider.add_memory("Retired general fact", category="general")
+        self.provider._write_memory("Replacement", "general", "tool", [retired_id])
+
+        written = self.provider._write_memory(
+            "Another replacement", "general", "tool", [live_id, retired_id, 9999]
+        )
+        self.assertEqual(written["superseded"], [live_id])
+        self.assertEqual(written["not_found"], [retired_id, 9999])
+        self.assertEqual(self._row(live_id)["status"], "superseded")
+
+    def test_remember_tool_surfaces_unknown_supersede_ids(self):
+        payload = json.loads(self.provider.handle_tool_call(
+            "sqlite_remember", {"content": "Fact with a typo", "supersedes": [4242]}
+        ))
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(payload["not_found"], [4242])
+
+    # --- verify scope ---
+
+    def test_verify_ignores_retired_rows_and_does_not_touch_updated_at(self):
+        old_id = self.provider.add_memory("Old environment fact", category="environment")
+        live_id = self.provider.add_memory("Live environment fact", category="environment")
+        self.provider._write_memory("New environment fact", "environment", "tool", [old_id])
+        with self.provider._conn() as conn:
+            with conn:
+                conn.execute(
+                    "UPDATE memories SET verified_at = ? WHERE id = ?", (_days_ago(30), live_id)
+                )
+
+        with self.provider._conn() as conn:
+            before = conn.execute(
+                "SELECT updated_at, verified_at FROM memories WHERE id = ?", (live_id,)
+            ).fetchone()
+        self.assertEqual(self.provider.verify_memories([old_id]), 0)
+        self.assertEqual(self.provider.verify_memories([live_id]), 1)
+
+        with self.provider._conn() as conn:
+            after = conn.execute(
+                "SELECT updated_at, verified_at FROM memories WHERE id = ?", (live_id,)
+            ).fetchone()
+        self.assertEqual(after["updated_at"], before["updated_at"])
+        self.assertNotEqual(after["verified_at"], before["verified_at"])
+        self.assertEqual(self.provider.search_memories("live environment")[0]["age_days"], 0)
+
+    # --- stats semantics ---
+
+    def test_stats_total_matches_category_sum_and_separates_retired_rows(self):
+        live_id = self.provider.add_memory("Live fact", category="project")
+        retired_id = self.provider.add_memory("Retired fact", category="project")
+        self.provider._write_memory("Replacement fact", "project", "tool", [retired_id])
+
+        stats = self.provider.get_stats()
+        self.assertEqual(stats["total_memories"], 2)
+        self.assertEqual(stats["active_memories"], 2)
+        self.assertEqual(sum(stats["categories"].values()), stats["total_memories"])
+        self.assertEqual(stats["all_memories"], 3)
+        self.assertIn(live_id, [row["id"] for row in self.provider.list_memories()])
 
 
 if __name__ == "__main__":

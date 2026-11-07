@@ -67,13 +67,14 @@ CATEGORY_TTL_DAYS: Dict[str, Optional[int]] = {
 }
 DEFAULT_TTL_DAYS = 180
 STALE_MARKER = "⚠要確認"
-# A sentence pinned to a moment (a date with a state word: 時点 / 確認 / 現在 / 実測) decays
-# even inside a durable category — it asserts a state, not a timeless rule. A bare
+# SQL expression for "the moment this row was last known to be true"; mirrors _known_at().
+_KNOWN_AT_SQL = "COALESCE(verified_at, updated_at, created_at)"
+# A sentence pinned to a moment (a date followed by a state word: 時点 / 確認 / 現在 / 実測)
+# decays even inside a durable category — it asserts a state, not a timeless rule. A bare
 # provenance date ("（2026-11-01 ユーザー指示）") does not.
+_DATE_PREFIX = r"\d{4}[-/]\d{1,2}(?:[-/]\d{1,2})?"
 TIME_BOUND_PATTERN = re.compile(
-    r"(\d{4}[-/]\d{1,2}(?:[-/]\d{1,2})?[^\n]{0,16}時点"
-    r"|\d{4}[-/]\d{1,2}(?:[-/]\d{1,2})?\s*時点で|時点で|\bas of\b"
-    r"|^\s*\d{4}[-/]\d{1,2}(?:[-/]\d{1,2})?\s*(?:時点|確認|現在|実測))",
+    rf"({_DATE_PREFIX}[^\n]{{0,16}}時点|時点で|\bas of\b|^\s*{_DATE_PREFIX}\s*(?:確認|現在|実測))",
     re.IGNORECASE,
 )
 
@@ -485,6 +486,48 @@ def _freshness(category: Optional[str], verified_at: Any, content: str = "") -> 
         "stale": (ttl is not None and age is not None and age > ttl),
         "date_pinned": dated,
     }
+
+
+def _known_at(row: Any) -> Any:
+    """The row's last known-good moment: verified_at, else the last write.
+
+    Resolved in one place so search, review and the prefetch hint cannot disagree about
+    how old a row is (a NULL verified_at used to read as "date unknown" in search but as
+    a dated row in review).
+    """
+    return row["verified_at"] or row["updated_at"] or row["created_at"]
+
+
+def _overdue_reasons(freshness: Dict[str, Any], days: int = 0) -> List[str]:
+    """Why this entry needs re-verification, if it does. One policy for every caller."""
+    reasons: List[str] = []
+    if freshness["age_days"] is None:
+        reasons.append("日付不明")
+    if freshness["stale"]:
+        reasons.append(f"TTL {freshness['ttl_days']}日超過")
+    if freshness["date_pinned"]:
+        reasons.append("時点付きの記述")
+    if days and days > 0 and freshness["age_days"] is not None and freshness["age_days"] > days:
+        reasons.append(f"{days}日超過")
+    return reasons
+
+
+def _coerce_memory_ids(raw_ids: Any) -> List[int]:
+    """Positive, de-duplicated IDs from loose tool input; anything unusable is dropped."""
+    ids: List[int] = []
+    seen: Set[int] = set()
+    for raw in raw_ids or []:
+        if isinstance(raw, bool):
+            continue
+        try:
+            memory_id = int(raw)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if memory_id <= 0 or memory_id in seen:
+            continue
+        seen.add(memory_id)
+        ids.append(memory_id)
+    return ids
 
 
 def _freshness_label(fields: Dict[str, Any]) -> str:
@@ -924,7 +967,7 @@ class SQLiteMemoryProvider(MemoryProvider):
         with self._conn() as conn:
             if fts_query:
                 sql = """
-                    SELECT m.id, m.category, m.content, m.created_at, m.verified_at,
+                    SELECT m.id, m.category, m.content, m.created_at, m.updated_at, m.verified_at,
                            bm25(memories_fts) as rank
                     FROM memories_fts f
                     JOIN memories m ON m.id = f.rowid
@@ -973,7 +1016,7 @@ class SQLiteMemoryProvider(MemoryProvider):
                 ][:3]
                 if keywords:
                     where = " OR ".join(["m.content LIKE ?" for _ in keywords])
-                    sql = f"SELECT id, category, content, created_at, verified_at FROM memories m WHERE ({where}) AND m.status = 'active'"
+                    sql = f"SELECT id, category, content, created_at, updated_at, verified_at FROM memories m WHERE ({where}) AND m.status = 'active'"
                     params = [f"%{k}%" for k in keywords]
                     if category:
                         sql += " AND m.category = ?"
@@ -985,8 +1028,7 @@ class SQLiteMemoryProvider(MemoryProvider):
 
             results = []
             for row in rows:
-                verified_at = row["verified_at"] if "verified_at" in row.keys() else None
-                freshness = _freshness(row["category"], verified_at, row["content"])
+                freshness = _freshness(row["category"], _known_at(row), row["content"])
                 results.append(
                     {
                         "id": row["id"],
@@ -1024,7 +1066,8 @@ class SQLiteMemoryProvider(MemoryProvider):
         ])
         block = (
             "## Relevant Long-Term Memories (from SQLite)\n"
-            "Age is shown per entry. ⚠要確認 = past its freshness window; verify before relying on it.\n"
+            f"Age is shown per entry. {STALE_MARKER} = past its freshness window; "
+            "verify before relying on it.\n"
             f"{formatted}"
         )
         hint = self._prefetch_review_hint()
@@ -1038,16 +1081,15 @@ class SQLiteMemoryProvider(MemoryProvider):
         """
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT id, category, content, verified_at FROM memories "
-                "WHERE status = 'active' AND verified_at IS NOT NULL "
-                "AND verified_at < datetime('now', '-2 days') "
-                "ORDER BY verified_at ASC LIMIT 200"
+                "SELECT id, category, content, verified_at, updated_at, created_at FROM memories "
+                f"WHERE status = 'active' AND {_KNOWN_AT_SQL} < datetime('now', '-2 days') "
+                f"ORDER BY {_KNOWN_AT_SQL} ASC LIMIT 200"
             ).fetchall()
 
         overdue: List[int] = []
         for row in rows:
-            freshness = _freshness(row["category"], row["verified_at"], row["content"])
-            if freshness["stale"] or freshness["date_pinned"]:
+            freshness = _freshness(row["category"], _known_at(row), row["content"])
+            if _overdue_reasons(freshness):
                 overdue.append(int(row["id"]))
         if not overdue:
             return ""
@@ -1108,32 +1150,45 @@ class SQLiteMemoryProvider(MemoryProvider):
                         (memory_id,),
                     )
                 superseded = self._mark_superseded(conn, supersedes, memory_id)
-        return {"memory_id": memory_id, "created": created, "superseded": superseded}
+        return {
+            "memory_id": memory_id,
+            "created": created,
+            "superseded": superseded["superseded"],
+            "not_found": superseded["not_found"],
+        }
 
     @staticmethod
     def _mark_superseded(conn: sqlite3.Connection, supersedes: Optional[List[int]],
-                         new_id: int) -> List[int]:
-        """Retire replaced rows without deleting them, so the correction stays auditable."""
-        applied: List[int] = []
-        seen: Set[int] = set()
-        for raw in supersedes or []:
-            if isinstance(raw, bool):
+                         new_id: int) -> Dict[str, List[int]]:
+        """Retire replaced rows without deleting them, and report the ones that were not retired.
+
+        A missing or already-retired ID is reported rather than dropped: silently ignoring it
+        would let the caller believe a contradiction was resolved when it was not.
+        """
+        outcome: Dict[str, List[int]] = {"superseded": [], "not_found": []}
+        ids = _coerce_memory_ids(supersedes)
+        candidates = [old_id for old_id in ids if old_id != new_id]
+        if not candidates:
+            return outcome
+        placeholders = ", ".join("?" for _ in candidates)
+        rows = conn.execute(
+            f"SELECT id, status FROM memories WHERE id IN ({placeholders})", candidates
+        ).fetchall()
+        active_ids = {int(row["id"]) for row in rows if row["status"] == "active"}
+        for old_id in candidates:
+            if old_id not in active_ids:
+                outcome["not_found"].append(old_id)
                 continue
-            try:
-                old_id = int(raw)
-            except (TypeError, ValueError, OverflowError):
-                continue
-            if old_id <= 0 or old_id == new_id or old_id in seen:
-                continue
-            seen.add(old_id)
             cursor = conn.execute(
                 "UPDATE memories SET status = 'superseded', superseded_by = ?, "
                 "updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'active'",
                 (new_id, old_id),
             )
             if cursor.rowcount:
-                applied.append(old_id)
-        return applied
+                outcome["superseded"].append(old_id)
+            else:
+                outcome["not_found"].append(old_id)
+        return outcome
 
     def delete_memory(self, memory_id: int) -> bool:
         with self._conn() as conn:
@@ -1161,32 +1216,28 @@ class SQLiteMemoryProvider(MemoryProvider):
 
     def review_memories(self, days: int = 0, category: Optional[str] = None,
                         limit: int = 50) -> List[Dict[str, Any]]:
-        """Active memories whose freshness window has passed, oldest first."""
+        """Active memories whose freshness window has passed, oldest first.
+
+        Rows known to be true within the last two days cannot be overdue (no TTL is shorter
+        than 30 days, and a date-pinned claim is only flagged once it ages), so the SQL floor
+        bounds the scan the same way the prefetch hint does.
+        """
         limit = _bounded_limit(limit, default=50)
         with self._conn() as conn:
             sql = ("SELECT id, category, content, source, status, created_at, updated_at, verified_at "
-                   "FROM memories WHERE status = 'active'")
+                   f"FROM memories WHERE status = 'active' AND {_KNOWN_AT_SQL} < datetime('now', '-2 days')")
             params: List[Any] = []
             if category:
                 sql += " AND category = ?"
                 params.append(category)
-            sql += " ORDER BY COALESCE(verified_at, updated_at, created_at) ASC"
+            sql += f" ORDER BY {_KNOWN_AT_SQL} ASC"
             rows = conn.execute(sql, params).fetchall()
 
         flagged: List[Dict[str, Any]] = []
         for row in rows:
             content = row["content"]
-            freshness = _freshness(row["category"], row["verified_at"] or row["updated_at"], content)
-            age = freshness["age_days"]
-            reasons: List[str] = []
-            if age is None:
-                reasons.append("日付不明")
-            if freshness["stale"]:
-                reasons.append(f"TTL {freshness['ttl_days']}日超過")
-            if freshness["date_pinned"]:
-                reasons.append("時点付きの記述")
-            if days and days > 0 and age is not None and age > days:
-                reasons.append(f"{days}日超過")
+            freshness = _freshness(row["category"], _known_at(row), content)
+            reasons = _overdue_reasons(freshness, days)
             if not reasons:
                 continue
             flagged.append(
@@ -1194,7 +1245,7 @@ class SQLiteMemoryProvider(MemoryProvider):
                     "id": row["id"],
                     "category": row["category"],
                     "content": content,
-                    "age_days": age,
+                    "age_days": freshness["age_days"],
                     "ttl_days": freshness["ttl_days"],
                     "reason": ", ".join(reasons),
                     "verified_at": freshness["verified_at"],
@@ -1205,25 +1256,20 @@ class SQLiteMemoryProvider(MemoryProvider):
         return flagged
 
     def verify_memories(self, memory_ids: List[int]) -> int:
-        """Reset the freshness clock on memories that are still true."""
-        ids: List[int] = []
-        for raw in memory_ids or []:
-            if isinstance(raw, bool):
-                continue
-            try:
-                memory_id = int(raw)
-            except (TypeError, ValueError, OverflowError):
-                continue
-            if memory_id > 0:
-                ids.append(memory_id)
+        """Reset the freshness clock on active memories that are still true.
+
+        Retired rows are ignored: confirming a fact that a newer one replaced would revive a
+        stale claim. ``updated_at`` is left alone so the list ordering only reflects writes.
+        """
+        ids = _coerce_memory_ids(memory_ids)
         if not ids:
             return 0
         placeholders = ", ".join("?" for _ in ids)
         with self._conn() as conn:
             with conn:
                 cursor = conn.execute(
-                    f"UPDATE memories SET verified_at = CURRENT_TIMESTAMP, "
-                    f"updated_at = CURRENT_TIMESTAMP WHERE id IN ({placeholders})",
+                    f"UPDATE memories SET verified_at = CURRENT_TIMESTAMP "
+                    f"WHERE id IN ({placeholders}) AND status = 'active'",
                     ids,
                 )
                 return int(cursor.rowcount or 0)
@@ -1406,14 +1452,15 @@ class SQLiteMemoryProvider(MemoryProvider):
                 if "memory_id" not in args:
                     return json.dumps({"error": "memory_id is required"})
                 raw_memory_id = args["memory_id"]
-                if isinstance(raw_memory_id, bool):
-                    return json.dumps({"error": "memory_id must be an integer"})
-                try:
-                    mem_id = int(raw_memory_id)
-                except (TypeError, ValueError, OverflowError):
-                    return json.dumps({"error": "memory_id must be an integer"})
-                if mem_id <= 0:
-                    return json.dumps({"error": "memory_id must be a positive integer"})
+                ids = _coerce_memory_ids([raw_memory_id])
+                if not ids:
+                    error = (
+                        "memory_id must be a positive integer"
+                        if isinstance(raw_memory_id, int) and not isinstance(raw_memory_id, bool)
+                        else "memory_id must be an integer"
+                    )
+                    return json.dumps({"error": error})
+                mem_id = ids[0]
                 deleted = self.delete_memory(mem_id)
                 return json.dumps({"status": "success" if deleted else "not_found", "message": f"Memory ID {mem_id} {'deleted' if deleted else 'not found'}."})
 

@@ -123,7 +123,7 @@ Restart the gateway, and start a new agent session, so the provider and API relo
 | `sqlite_list_memories` | Lists memories, newest `updated_at` first, with an optional category filter | `category` (optional), `limit` (default 10, clamped to 1–100), `include_superseded` (default false) |
 | `sqlite_review` | Lists memories past their freshness window so they can be re-verified or replaced | `days` (extra window, default 0 = policy only), `category`, `limit` (default 50) |
 | `sqlite_verify` | Confirms memories are still true, resetting their freshness clock | `memory_ids` (array of IDs) |
-| `sqlite_stats` | Returns memory count, category counts, last update time, database size, and WAL size | None |
+| `sqlite_stats` | Returns the active-memory count, category counts (their sum equals the total), the retained-row count (`all_memories`), last update time, database size, and WAL size | None |
 
 For queries without Japanese kana/kanji, `sqlite_search` drops tokens shorter than 2 characters and keeps at most 10 terms before the FTS query. In queries containing Japanese kana/kanji, runs are split into overlapping 2–5-character fragments (up to 500), taken across the whole run rather than only from the start. Japanese substring matches run alongside FTS even when it finds English results, and are ranked by the longest matched fragment. For queries without Japanese, LIKE is used only when FTS returns no rows.
 
@@ -296,7 +296,7 @@ memory:
 | `sqlite_list_memories` | `updated_at` の新しい順に一覧する。カテゴリ絞り込み可 | `category`（任意）, `limit`（既定 10、1〜100）, `include_superseded`（既定 false） |
 | `sqlite_review` | 鮮度切れの記憶を列挙する（再確認・差し替えの対象） | `days`（追加の期限。既定 0 = カテゴリ方針のみ）, `category`, `limit`（既定 50） |
 | `sqlite_verify` | 記憶が今も正しいと確認し、鮮度の起点を更新する | `memory_ids`（ID の配列） |
-| `sqlite_stats` | 記憶件数・カテゴリ別件数・最終更新日時・DB本体サイズ・WALサイズを返す | なし |
+| `sqlite_stats` | 有効な記憶件数・カテゴリ別件数（合計と一致）・退役行も含む総数（`all_memories`）・最終更新日時・DBサイズ・WALサイズを返す | なし |
 
 仮名・漢字を含まない検索では、`sqlite_search` は 2 文字未満の語を捨て、FTS に最大 10 語を渡します。仮名・漢字を含むクエリでは、日本語の連続部分を重複する 2〜5 文字の断片（最大 500 個）に分けます。長い文でも先頭だけで切らず、文全体から取ります。日本語を含むクエリでは、FTS の結果有無にかかわらず日本語部分一致も検索し、最長一致断片で順位付けします。日本語を含まない検索だけ、FTS が 0 件の場合に LIKE へフォールバックします。
 

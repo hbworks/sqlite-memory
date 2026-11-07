@@ -14,8 +14,13 @@ def _file_size_bytes(path: Path) -> int:
 
 
 def collect_memory_stats(conn: sqlite3.Connection, db_path: Path) -> Dict[str, Any]:
-    """Collect database and memory counts without checkpointing the WAL."""
-    total_row = conn.execute("SELECT COUNT(*) FROM memories").fetchone()
+    """Collect database and memory counts without checkpointing the WAL.
+
+    ``total_memories`` counts what the agent currently remembers (active rows) so it matches
+    the sum of ``categories`` and the rows the browser lists; ``all_memories`` also counts
+    retired rows kept for audit.
+    """
+    all_row = conn.execute("SELECT COUNT(*) FROM memories").fetchone()
     active_row = conn.execute("SELECT COUNT(*) FROM memories WHERE status = 'active'").fetchone()
     category_rows = conn.execute(
         """SELECT category, COUNT(*)
@@ -25,10 +30,12 @@ def collect_memory_stats(conn: sqlite3.Connection, db_path: Path) -> Dict[str, A
            ORDER BY category"""
     ).fetchall()
     updated_row = conn.execute("SELECT MAX(updated_at) FROM memories").fetchone()
+    active_total = int(active_row[0]) if active_row else 0
 
     return {
-        "total_memories": int(total_row[0]),
-        "active_memories": int(active_row[0]) if active_row else 0,
+        "total_memories": active_total,
+        "active_memories": active_total,
+        "all_memories": int(all_row[0]) if all_row else 0,
         "categories": {row[0]: int(row[1]) for row in category_rows},
         "last_updated_at": updated_row[0],
         "db_size_bytes": _file_size_bytes(db_path),
